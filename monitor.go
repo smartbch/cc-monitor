@@ -35,25 +35,24 @@ const (
 )
 
 var (
-	ErrCovenantAddrMismatch    = errors.New("")
-	ErrDuplicatedUtxo          = errors.New("")
-	ErrFailedToCreate          = errors.New("")
-	ErrInvalidSourceType       = errors.New("")
-	ErrNotFound                = errors.New("")
-	ErrNotHandedOver           = errors.New("")
-	ErrNotLostAndFound         = errors.New("")
-	ErrNotLostAndReturn        = errors.New("")
-	ErrNotLostAndReturnToDel   = errors.New("")
-	ErrNotRedeemable           = errors.New("")
-	ErrNotRedeemOrReturn       = errors.New("")
-	ErrNotRedeemingToDel       = errors.New("")
-	ErrNotReturnToOldOwner     = errors.New("")
-	ErrNotToBeRecognized       = errors.New("")
-	ErrNotToBurningAddress     = errors.New("")
-	ErrReceiverNotOldOwner     = errors.New("")
-	ErrReceiverNotRedeemTarget = errors.New("")
-	ErrNoBlockFoundAtGivenHeight = errors.New("")
-	ErrNoBlockFoundForGivenHash = errors.New("")
+	ErrCovenantAddrMismatch    = errors.New("Covenant Address Mismatch")
+	ErrDuplicatedUtxo          = errors.New("Find Duplicated Utxo")
+	ErrFailedToCreate          = errors.New("Failed to Create")
+	ErrInvalidSourceType       = errors.New("Invalid Source Type")
+	ErrNotFound                = errors.New("UTXO Not Found")
+	ErrNotHandedOver           = errors.New("Not HandedOver Status")
+	ErrNotLostAndFound         = errors.New("Not LostAndFound Status")
+	ErrNotLostAndReturn        = errors.New("Not LostAndReturn Status")
+	ErrNotLostAndReturnToDel   = errors.New("Not LostAndReturnToDel Status")
+	ErrNotRedeemable           = errors.New("Not Redeemable Status")
+	ErrNotRedeemOrReturn       = errors.New("Not Redeemable or LostAndReturn Status")
+	ErrNotRedeemingToDel       = errors.New("Not Redeeming Status")
+	ErrNotToBeRecognized       = errors.New("Not ToBeRecognized Status")
+	ErrIncorrectBurningAddress = errors.New("Incorrect Burning Address")
+	ErrReceiverNotOldOwner     = errors.New("Receiver Not Old Owner")
+	ErrReceiverNotRedeemTarget = errors.New("Receiver Not RedeemTarget")
+	ErrNoBlockFoundAtGivenHeight = errors.New("No Block Found at the Given Height")
+	ErrNoBlockFoundForGivenHash = errors.New("No Block Found for the Given Hash")
 )
 
 var (
@@ -193,7 +192,7 @@ func sideEvtRedeem(db *gorm.DB, covenantAddr string, txid string, vout uint32, s
 			return ErrNotToBeRecognized
 		}
 		if redeemTarget != MainChainBurningAddress {
-			return ErrNotToBurningAddress
+			return ErrIncorrectBurningAddress
 		}
 		db.Model(&utxo).Updates(CcUtxo{Type: Redeeming, RedeemTarget: redeemTarget})
 	}
