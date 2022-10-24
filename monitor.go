@@ -1,21 +1,22 @@
-package monitor
+package main
 
 import (
 	"context"
-	"errors"
 	"encoding/binary"
+	"errors"
 	"math/big"
+	"sync"
 
-	"github.com/gcash/bchd/chaincfg"
-	"github.com/gcash/bchd/rpcclient"
-	"github.com/gcash/bchd/wire"
-	"github.com/gcash/bchd/txscript"
-	"github.com/gcash/bchutil"
-	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/crypto"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/gcash/bchd/chaincfg"
+	"github.com/gcash/bchd/rpcclient"
+	"github.com/gcash/bchd/txscript"
+	"github.com/gcash/bchd/wire"
+	"github.com/gcash/bchutil"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -35,33 +36,33 @@ const (
 )
 
 var (
-	ErrCovenantAddrMismatch    = errors.New("Covenant Address Mismatch")
-	ErrDuplicatedUtxo          = errors.New("Find Duplicated Utxo")
-	ErrFailedToCreate          = errors.New("Failed to Create")
-	ErrInvalidSourceType       = errors.New("Invalid Source Type")
-	ErrNotFound                = errors.New("UTXO Not Found")
-	ErrNotHandedOver           = errors.New("Not HandedOver Status")
-	ErrNotLostAndFound         = errors.New("Not LostAndFound Status")
-	ErrNotLostAndReturn        = errors.New("Not LostAndReturn Status")
-	ErrNotLostAndReturnToDel   = errors.New("Not LostAndReturnToDel Status")
-	ErrNotRedeemable           = errors.New("Not Redeemable Status")
-	ErrNotRedeemOrReturn       = errors.New("Not Redeemable or LostAndReturn Status")
-	ErrNotRedeemingToDel       = errors.New("Not Redeeming Status")
-	ErrNotToBeRecognized       = errors.New("Not ToBeRecognized Status")
-	ErrIncorrectBurningAddress = errors.New("Incorrect Burning Address")
-	ErrReceiverNotOldOwner     = errors.New("Receiver Not Old Owner")
-	ErrReceiverNotRedeemTarget = errors.New("Receiver Not RedeemTarget")
+	ErrCovenantAddrMismatch      = errors.New("Covenant Address Mismatch")
+	ErrDuplicatedUtxo            = errors.New("Find Duplicated Utxo")
+	ErrFailedToCreate            = errors.New("Failed to Create")
+	ErrInvalidSourceType         = errors.New("Invalid Source Type")
+	ErrNotFound                  = errors.New("UTXO Not Found")
+	ErrNotHandedOver             = errors.New("Not HandedOver Status")
+	ErrNotLostAndFound           = errors.New("Not LostAndFound Status")
+	ErrNotLostAndReturn          = errors.New("Not LostAndReturn Status")
+	ErrNotLostAndReturnToDel     = errors.New("Not LostAndReturnToDel Status")
+	ErrNotRedeemable             = errors.New("Not Redeemable Status")
+	ErrNotRedeemOrReturn         = errors.New("Not Redeemable or LostAndReturn Status")
+	ErrNotRedeemingToDel         = errors.New("Not Redeeming Status")
+	ErrNotToBeRecognized         = errors.New("Not ToBeRecognized Status")
+	ErrIncorrectBurningAddress   = errors.New("Incorrect Burning Address")
+	ErrReceiverNotOldOwner       = errors.New("Receiver Not Old Owner")
+	ErrReceiverNotRedeemTarget   = errors.New("Receiver Not RedeemTarget")
 	ErrNoBlockFoundAtGivenHeight = errors.New("No Block Found at the Given Height")
-	ErrNoBlockFoundForGivenHash = errors.New("No Block Found for the Given Hash")
+	ErrNoBlockFoundForGivenHash  = errors.New("No Block Found for the Given Hash")
 )
 
 var (
-	EventNewRedeemable = crypto.Keccak256Hash([]byte("NewRedeemable(uint256,uint32,address)"))
+	EventNewRedeemable   = crypto.Keccak256Hash([]byte("NewRedeemable(uint256,uint32,address)"))
 	EventNewLostAndFound = crypto.Keccak256Hash([]byte("NewLostAndFound(uint256,uint32,address)"))
-	EventRedeem = crypto.Keccak256Hash([]byte("Redeem(uint256,uint32,address,uint8)"))
-	EventChangeAddr = crypto.Keccak256Hash([]byte("ChangeAddr(address,address)"))
-	EventConvert = crypto.Keccak256Hash([]byte("Convert(uint256,uint32,address,uint256,uint32,address)"))
-	EventDeleted = crypto.Keccak256Hash([]byte("Deleted(uint256,uint32,address,uint8)"))
+	EventRedeem          = crypto.Keccak256Hash([]byte("Redeem(uint256,uint32,address,uint8)"))
+	EventChangeAddr      = crypto.Keccak256Hash([]byte("ChangeAddr(address,address)"))
+	EventConvert         = crypto.Keccak256Hash([]byte("Convert(uint256,uint32,address,uint256,uint32,address)"))
+	EventDeleted         = crypto.Keccak256Hash([]byte("Deleted(uint256,uint32,address,uint8)"))
 )
 
 const (
@@ -484,4 +485,83 @@ func (bs *BlockScanner) processReceipt(tx *ethtypes.Transaction) error {
 		}
 	}
 	return nil
+}
+
+type Context struct {
+	db                    *gorm.DB
+	lock                  sync.RWMutex
+	sideChainBlockScanner *BlockScanner
+	mainnetBlockWatcher   *BlockWatcher
+
+	currMainnetHeight      int64
+	currSideChainHeight    int64
+	totalUnhandledUtxoNums uint32
+	prevStartRescanHeight  int64
+}
+
+var (
+	MaxUnhandledUtxoNums           uint32 = 100
+	MaxBlockIntervalBetweenRescans int64  = 300
+)
+
+func (c *Context) checkCallStartRescan() bool {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+	if c.totalUnhandledUtxoNums >= MaxUnhandledUtxoNums {
+		return true
+	}
+	if c.currMainnetHeight-c.prevStartRescanHeight >= MaxBlockIntervalBetweenRescans {
+		return true
+	}
+	return false
+}
+
+func (c *Context) refreshContext() {
+	c.totalUnhandledUtxoNums = 0
+	c.prevStartRescanHeight = c.currMainnetHeight
+}
+
+// retry until success
+func sendStartRescan(height int64) {
+
+}
+
+func main() {
+	// init db
+	// init key and side chain client and server
+	// recover context
+	c := Context{
+		sideChainBlockScanner: &BlockScanner{},
+		mainnetBlockWatcher:   &BlockWatcher{},
+
+		currMainnetHeight:      1,
+		currSideChainHeight:    1,
+		totalUnhandledUtxoNums: 0,
+		prevStartRescanHeight:  0,
+	}
+	go func() {
+		for /* get side chain block height*/ {
+			height := int64(0)
+			err := c.sideChainBlockScanner.ScanBlock(height)
+			if err != nil {
+				panic(err)
+			}
+		}
+	}()
+	go func() {
+		for /* get main chain block height*/ {
+			height := int64(0)
+			err := c.mainnetBlockWatcher.HandleBlock(height)
+			if err != nil {
+				panic(err)
+			}
+			c.lock.Lock()
+			c.currMainnetHeight = height
+			c.lock.Unlock()
+			if c.checkCallStartRescan() {
+				sendStartRescan(height)
+			}
+		}
+	}()
+	select {}
 }
