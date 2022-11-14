@@ -9,11 +9,11 @@ import (
 
 	goecies "github.com/ecies/go"
 	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/ethclient"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/smartbch/smartbch/crosschain"
+	"github.com/ethereum/go-ethereum/ethclient"
+	ccabi "github.com/smartbch/smartbch/crosschain/abi"
 )
 
 var (
@@ -44,16 +44,16 @@ func readPrivKey() {
 }
 
 func PackStartRescanFunc(mainFinalizedBlockHeight *big.Int) []byte {
-	return crosschain.ABI.MustPack("startRescan", mainFinalizedBlockHeight)
+	return ccabi.ABI.MustPack("startRescan", mainFinalizedBlockHeight)
 }
 
 func sendPauseTransaction(ctx context.Context, client *ethclient.Client) error {
-	callData := crosschain.PackPauseFunc()
+	callData := ccabi.PackPauseFunc()
 	return sendTransaction(ctx, client, callData)
 }
 
 func sendRescanTransaction(ctx context.Context, client *ethclient.Client, height int64) error {
-	callData := crosschain.PackStartRescanFunc(big.NewInt(height))
+	callData := ccabi.PackStartRescanFunc(big.NewInt(height))
 	return sendTransaction(ctx, client, callData)
 }
 

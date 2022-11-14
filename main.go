@@ -1,10 +1,11 @@
 package main
 
 import (
+	"context"
 	"sync"
 
-	"gorm.io/gorm"
 	"github.com/smartbch/cc-monitor/monitor"
+	"gorm.io/gorm"
 )
 
 // ==================
@@ -64,7 +65,7 @@ func main() {
 	go func() {
 		for /* get side chain block height*/ {
 			height := int64(0)
-			err := c.sideChainBlockScanner.ScanBlock(height)
+			err := c.sideChainBlockScanner.ScanBlock(context.Background(), height)
 			if err != nil {
 				panic(err)
 			}
