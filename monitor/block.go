@@ -4,10 +4,14 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
+	"math"
+	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/gcash/bchd/chaincfg"
 	"github.com/gcash/bchd/rpcclient"
@@ -17,6 +21,34 @@ import (
 	mevmtypes "github.com/smartbch/moeingevm/types"
 	"gorm.io/gorm"
 )
+
+func SendStartRescanAndHandleUTXO(lastRescanHeight, interval int64,
+	ctx context.Context, client *ethclient.Client, bchClient *rpcclient.Client) {
+	startRescanTime := int64(math.MaxInt64)
+	height := lastRescanHeight + 1
+	for {
+		time.Sleep(30*time.Second)
+		if startRescanTime + 22*60 < time.Now().Unix() {
+			err := sendHandleUtxoTransaction(ctx, client)
+			if err != nil {
+				fmt.Printf("Error in sendHandleUtxoTransaction: %#v\n", err)
+			}
+		}
+		_, err := bchClient.GetBlockHash(height+9)
+		if err != nil {
+			continue
+		}
+		height++
+		if lastRescanHeight + 2 <= height {
+			lastRescanHeight = height
+			startRescanTime = time.Now().Unix()
+			err := sendRescanTransaction(ctx, client, height)
+			if err != nil {
+				fmt.Printf("Error in sendRescanTransaction: %#v\n", err)
+			}
+		}
+	}
+}
 
 // accumulate the cc-transactions on main chain
 type CCTxCounter struct {

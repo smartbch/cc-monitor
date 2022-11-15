@@ -26,6 +26,32 @@ var (
 	CCAddress = common.HexToAddress("0x0000000000000000000000000000000000002714")
 )
 
+// Used by the person who keeps the monitor's private key
+func encryptPrivKey() {
+	var inputHex string
+	fmt.Print("Enter the private key: ")
+	fmt.Scanf("%s", &inputHex)
+	privKeyBz, err := hex.DecodeString(inputHex)
+	if err != nil {
+		fmt.Print("Cannot decode hex string\n")
+		panic(err)
+	}
+	fmt.Print("Enter the Ecies Pubkey: ")
+	fmt.Scanf("%s", &inputHex)
+	pubkey, err := goecies.NewPublicKeyFromHex(inputHex)
+	if err != nil {
+		fmt.Print("Cannot decode ecies pubkey\n")
+		panic(err)
+	}
+	out, err := goecies.Encrypt(pubkey, privKeyBz)
+	if err != nil {
+		fmt.Print("Cannot encrypt pubkey\n")
+		panic(err)
+	}
+
+	fmt.Printf("The Encrypted Pubkey: %s", hex.EncodeToString(out))
+}
+
 func readPrivKey() {
 	eciesPrivKey, err := goecies.GenerateKey()
 	if err != nil {
