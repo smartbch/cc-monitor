@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/smartbch/cc-monitor/monitor"
 	"gorm.io/gorm"
@@ -15,6 +16,7 @@ type Context struct {
 	lock                  sync.RWMutex
 	sideChainBlockScanner *monitor.BlockScanner
 	mainnetBlockWatcher   *monitor.BlockWatcher
+	operatorsWatcher      *monitor.OperatorsWatcher
 
 	currMainnetHeight      int64
 	currSideChainHeight    int64
@@ -83,6 +85,15 @@ func main() {
 			c.lock.Unlock()
 			if c.checkCallStartRescan() {
 				sendStartRescan(height)
+			}
+		}
+	}()
+	go func() {
+		for {
+			time.Sleep(30 * time.Second)
+			err := c.operatorsWatcher.Check()
+			if err != nil {
+				panic(err)
 			}
 		}
 	}()

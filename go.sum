@@ -786,6 +786,10 @@ github.com/sirupsen/logrus v1.4.2/go.mod h1:tLMulIdttU9McNUspp0xgXVQah82FyeX6Mwd
 github.com/sirupsen/logrus v1.6.0/go.mod h1:7uNnSEd1DgxDLC74fIahvMZmmYsHGZGEOFrfsX/uA88=
 github.com/sirupsen/logrus v1.7.0/go.mod h1:yWOB1SBYBC5VeMP7gHvWumXLIWorT60ONWic61uBYv0=
 github.com/sirupsen/logrus v1.8.1/go.mod h1:yWOB1SBYBC5VeMP7gHvWumXLIWorT60ONWic61uBYv0=
+github.com/smartbch/cc-operator v0.0.0-20221115040903-ce5e5560922a h1:QGqXZprVgS7lr/cQRUcoKL2vI6a5m3BOKiTGYm39OnU=
+github.com/smartbch/cc-operator v0.0.0-20221115040903-ce5e5560922a/go.mod h1:D258vnUvUuZ5DqBGcdYx6tC/WfT9A/bh0Kz5Uy2MlOA=
+github.com/smartbch/cc-operator v0.0.0-20221115063752-495ab666dc6a h1:hc0m+fOzghj7W0EwqQlmrg2pVUGKsSK0oM5dq6Ybd+I=
+github.com/smartbch/cc-operator v0.0.0-20221115063752-495ab666dc6a/go.mod h1:D258vnUvUuZ5DqBGcdYx6tC/WfT9A/bh0Kz5Uy2MlOA=
 github.com/smartbch/moeingads v0.4.2 h1:M9Qc/Gx9ZzL6yFYroRvpd1qTu95SmmbqWnKlQrIGJ/4=
 github.com/smartbch/moeingads v0.4.2/go.mod h1:ItNDsGpUoDo/lNxd+EfQ0FbcoT/QsZ+T06kPdFlCm9g=
 github.com/smartbch/moeingdb v0.4.4-0.20220901031017-07b13bf12c62 h1:gbcfMQu24lb+eopMO2kSneYr4u9fXWJcKkxHksEkmN4=

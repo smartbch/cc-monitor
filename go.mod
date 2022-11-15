@@ -37,6 +37,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/sasha-s/go-deadlock v0.2.1-0.20190427202633-1595213edefa // indirect
 	github.com/shirou/gopsutil v3.21.4-0.20210419000835-c7a38de76ee5+incompatible // indirect
+	github.com/smartbch/cc-operator v0.0.0-20221115063752-495ab666dc6a // indirect
 	github.com/smartbch/moeingads v0.4.2 // indirect
 	github.com/smartbch/moeingdb v0.4.4-0.20220901031017-07b13bf12c62 // indirect
 	github.com/tendermint/tendermint v0.34.10 // indirect
