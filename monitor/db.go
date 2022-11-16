@@ -20,6 +20,8 @@ const (
 	RedeemingToDel     = 7
 	HandingOver        = 8
 	HandedOver         = 9
+
+	MaxAmount          = 1000 * 10000_0000 //1000 BCH
 )
 
 /* State Transitions:
@@ -56,6 +58,7 @@ var (
 	ErrReceiverNotRedeemTarget   = errors.New("Receiver Not RedeemTarget")
 	ErrNoBlockFoundAtGivenHeight = errors.New("No Block Found at the Given Height")
 	ErrNoBlockFoundForGivenHash  = errors.New("No Block Found for the Given Hash")
+	ErrEvilBackToMainchain       = errors.New("Evil Transaction Sending BCH to Mainchain")
 )
 
 var (
@@ -96,6 +99,31 @@ type MetaInfo struct {
 	SideChainHeight  int64
 	CurrCovenantAddr string
 	LastCovenantAddr string
+	TimestampX24     [24]int64
+	AmountX24        [24]int64
+	IsPaused         bool
+}
+
+func (m *MetaInfo) incrAmount(amount, currTime int64) {
+	hour := currTime/3600
+	slot := hour%24;
+	if hour != m.TimestampX24[slot] {
+		m.TimestampX24[slot] = 0
+	}
+	m.TimestampX24[slot] += amount
+	if m.TimestampX24[slot] > MaxAmount {
+		m.IsPaused = true
+	}
+}
+
+func sumAmountInLast24(currTime int64, timestampX24 [24]int64, amountX24 [24]int64) (sum int64) {
+	hour := currTime/3600
+	for i := range timestampX24 {
+		if hour - timestampX24[i] < 24 {
+			sum += amountX24[i]
+		}
+	}
+	return
 }
 
 type ConvertParams struct {
@@ -175,10 +203,15 @@ func updateCovenantAddr(tx *gorm.DB, currAddr, lastAddr string) error {
 	return nil
 }
 
-func getUtxoSet(tx *gorm.DB) map[[36]byte]struct{} {
+func getUtxoSet(tx *gorm.DB, waitingMainChain bool) (map[[36]byte]struct{}) {
 	result := make(map[[36]byte]struct{})
 	var utxoList []CcUtxo
-	tx.Find(&utxoList)
+	if waitingMainChain {
+		// utxo.Type == LostAndReturn || utxo.Type == Redeeming || utxo.Type == HandingOver
+		tx.Find(&utxoList, "Type IN ?", []int{LostAndReturn, Redeeming, HandingOver})
+	} else {
+		tx.Find(&utxoList)
+	}
 	for _, utxo := range utxoList {
 		var id [36]byte
 		copy(id[:32], utxo.Txid)
@@ -235,7 +268,8 @@ func sideEvtLostAndFound(tx *gorm.DB, covenantAddr string, txid string, vout uin
 	return nil
 }
 
-func sideEvtRedeem(tx *gorm.DB, covenantAddr string, txid string, vout uint32, sourceType uint8, redeemTarget string) error {
+func sideEvtRedeem(tx *gorm.DB, covenantAddr string, txid string, vout uint32, sourceType uint8, redeemTarget string,
+	meta *MetaInfo, currTime int64) error {
 	var utxo CcUtxo
 	result := tx.First(&utxo, "txid == ? AND vout == ?", txid, vout)
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
@@ -249,12 +283,14 @@ func sideEvtRedeem(tx *gorm.DB, covenantAddr string, txid string, vout uint32, s
 			return ErrNotRedeemable
 		}
 		tx.Model(&utxo).Updates(CcUtxo{Type: Redeeming, RedeemTarget: redeemTarget})
+		meta.incrAmount(utxo.Amount, currTime)
 		return nil
 	} else if sourceType == FromLostAndFound {
 		if utxo.Type != LostAndFound {
 			return ErrNotLostAndFound
 		}
 		tx.Model(&utxo).Updates(CcUtxo{Type: LostAndReturn, RedeemTarget: redeemTarget})
+		meta.incrAmount(utxo.Amount, currTime)
 		return nil
 	} else if sourceType == FromBurnRedeem {
 		if utxo.Type != ToBeRecognized {
@@ -264,12 +300,13 @@ func sideEvtRedeem(tx *gorm.DB, covenantAddr string, txid string, vout uint32, s
 			return ErrIncorrectBurningAddress
 		}
 		tx.Model(&utxo).Updates(CcUtxo{Type: Redeeming, RedeemTarget: redeemTarget})
+		meta.incrAmount(utxo.Amount, currTime)
 		return nil
 	}
 	return ErrInvalidSourceType
 }
 
-func mainEvtRedeemOrReturn(tx *gorm.DB, txid string, vout uint32, receiver string) error {
+func mainEvtRedeemOrReturn(tx *gorm.DB, txid string, vout uint32, receiver string, writeBack bool) error {
 	var utxo CcUtxo
 	result := tx.First(&utxo, "txid == ? AND vout == ?", txid, vout)
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
@@ -282,18 +319,22 @@ func mainEvtRedeemOrReturn(tx *gorm.DB, txid string, vout uint32, receiver strin
 		if utxo.RedeemTarget != receiver {
 			return ErrReceiverNotRedeemTarget
 		}
-		tx.Model(&utxo).Update("Type", RedeemingToDel)
+		if writeBack {
+			tx.Model(&utxo).Update("Type", RedeemingToDel)
+		}
 	}
 	if utxo.Type == LostAndReturn {
 		if utxo.RedeemTarget != receiver {
 			return ErrReceiverNotOldOwner
 		}
-		tx.Model(&utxo).Update("Type", LostAndReturnToDel)
+		if writeBack {
+			tx.Model(&utxo).Update("Type", LostAndReturnToDel)
+		}
 	}
 	return nil
 }
 
-func mainEvtFinishConverting(tx *gorm.DB, txid string, vout uint32, newCovenantAddr string) error {
+func mainEvtFinishConverting(tx *gorm.DB, txid string, vout uint32, newCovenantAddr string, writeBack bool) error {
 	var utxo CcUtxo
 	result := tx.First(&utxo, "txid == ? AND vout == ?", txid, vout)
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
@@ -305,7 +346,9 @@ func mainEvtFinishConverting(tx *gorm.DB, txid string, vout uint32, newCovenantA
 	if utxo.CovenantAddr != newCovenantAddr {
 		return ErrCovenantAddrMismatch
 	}
-	tx.Model(&utxo).Update("Type", HandedOver)
+	if writeBack {
+		tx.Model(&utxo).Update("Type", HandedOver)
+	}
 	return nil
 }
 
