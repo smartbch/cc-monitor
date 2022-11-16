@@ -90,6 +90,7 @@ type CcUtxo struct {
 
 type MetaInfo struct {
 	gorm.Model
+	LastRescanTime   int64
 	ScannedHeight    int64
 	MainChainHeight  int64
 	SideChainHeight  int64
@@ -124,13 +125,23 @@ func getMetaInfo(tx *gorm.DB) (info MetaInfo, err error) {
 	return
 }
 
-func updateScannedHeight(tx *gorm.DB, scannedHeight int64) error {
+func updateLastRescanTime(tx *gorm.DB, lastRescanTime int64) error {
 	var oldInfo MetaInfo
 	result := tx.First(&oldInfo)
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		return ErrNotFound
 	}
-	tx.Model(&oldInfo).Update("ScannedHeight", scannedHeight)
+	tx.Model(&oldInfo).Update("LastRescanTime", lastRescanTime)
+	return nil
+}
+
+func updateScannedHeightAndTime(tx *gorm.DB, scannedHeight int64, lastRescanTime int64) error {
+	var oldInfo MetaInfo
+	result := tx.First(&oldInfo)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return ErrNotFound
+	}
+	tx.Model(&oldInfo).Updates(MetaInfo{ScannedHeight: scannedHeight, LastRescanTime: lastRescanTime})
 	return nil
 }
 
