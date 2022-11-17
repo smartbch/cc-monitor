@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"strconv"
@@ -72,22 +73,22 @@ func readPrivKey() {
 	MyAddress = crypto.PubkeyToAddress(MyPrivKey.PublicKey)
 }
 
-func sendPauseTransaction(ctx context.Context, client *ethclient.Client) error {
+func sendPauseTransaction(ctx context.Context, client *ethclient.Client) (common.Hash, error) {
 	callData := ccabi.PackPauseFunc()
 	return sendTransaction(ctx, client, MyAddress, CCAddress, callData)
 }
 
-func sendResumeTransaction(ctx context.Context, client *ethclient.Client) error {
+func sendResumeTransaction(ctx context.Context, client *ethclient.Client) (common.Hash, error) {
 	callData := ccabi.PackResumeFunc()
 	return sendTransaction(ctx, client, MyAddress, CCAddress, callData)
 }
 
-func sendRescanTransaction(ctx context.Context, client *ethclient.Client, height int64) error {
+func sendStartRescanTransaction(ctx context.Context, client *ethclient.Client, height int64) (common.Hash, error) {
 	callData := ccabi.PackStartRescanFunc(big.NewInt(height))
 	return sendTransaction(ctx, client, MyAddress, CCAddress, callData)
 }
 
-func sendHandleUtxoTransaction(ctx context.Context, client *ethclient.Client) error {
+func sendHandleUtxoTransaction(ctx context.Context, client *ethclient.Client) (common.Hash, error) {
 	callData := ccabi.PackHandleUTXOsFunc()
 	return sendTransaction(ctx, client, MyAddress, CCAddress, callData)
 }
@@ -102,31 +103,42 @@ func sendPauseOperator() error {
 	return SendSuspendToOperator(hex.EncodeToString(sig), ts)
 }
 
-func sendTransaction(ctx context.Context, client *ethclient.Client, from, to common.Address, callData []byte) error {
+func sendTransaction(ctx context.Context, client *ethclient.Client, from, to common.Address, callData []byte) (common.Hash, error) {
 	nonce, err := client.PendingNonceAt(ctx, from)
 	if err != nil {
-		return err
+		return common.Hash{}, err
 	}
 	gasPrice, err := client.SuggestGasPrice(ctx)
 	if err != nil {
-		return err
+		return common.Hash{}, err
 	}
 	gasLimit, err := client.EstimateGas(ctx, ethereum.CallMsg{
 		To:   &to,
 		Data: callData,
 	})
 	if err != nil {
-		return err
+		return common.Hash{}, err
 	}
 	value := big.NewInt(0)
 	tx := types.NewTransaction(nonce, CCAddress, value, gasLimit, gasPrice, callData)
 	chainID, err := client.NetworkID(ctx)
 	if err != nil {
-		return err
+		return common.Hash{}, err
 	}
 	signedTx, err := types.SignTx(tx, types.NewEIP155Signer(chainID), MyPrivKey)
 	if err != nil {
+		return common.Hash{}, err
+	}
+	return signedTx.Hash(), client.SendTransaction(ctx, signedTx)
+}
+
+func checkTxStatus(ctx context.Context, client *ethclient.Client, txHash common.Hash) error {
+	tx, err := client.TransactionReceipt(ctx, txHash)
+	if err != nil {
 		return err
 	}
-	return client.SendTransaction(ctx, signedTx)
+	if tx.Status != uint64(1) {
+		return errors.New("tx failed: " + txHash.String())
+	}
+	return nil
 }

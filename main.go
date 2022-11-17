@@ -2,11 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
+	"flag"
+	"fmt"
 	"sync"
-	"time"
+
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/gcash/bchd/rpcclient"
+	"gorm.io/gorm"
 
 	"github.com/smartbch/cc-monitor/monitor"
-	"gorm.io/gorm"
 )
 
 // ==================
@@ -51,51 +57,54 @@ func sendStartRescan(height int64) {
 
 }
 
-func main() {
-	// init db
-	// init key and side chain client and server
-	// recover context
-	c := Context{
-		sideChainBlockScanner: &monitor.BlockScanner{},
-		mainnetBlockWatcher:   &monitor.BlockWatcher{},
+var (
+	monitorPrivateKey string
+	sideChainUrl      string
+	mainnetUrl        string
+	mainnetUsername   string
+	mainnetPassword   string
+	lastRescanHeight  int64
+	lastRescanTime    int64
+)
 
-		currMainnetHeight:      1,
-		currSideChainHeight:    1,
-		totalUnhandledUtxoNums: 0,
-		prevStartRescanHeight:  0,
+const (
+	handleUtxoDelay int64 = 1 * 60
+)
+
+func main() {
+	flag.StringVar(&monitorPrivateKey, "key", "", "monitor private key")
+	flag.StringVar(&sideChainUrl, "sbchUrl", "http://localhost:8545", "side chain rpc url")
+	flag.StringVar(&mainnetUrl, "mainnetUrl", "http://localhost:8332", "mainnet url")
+	flag.StringVar(&mainnetUsername, "mainnetUsername", "", "mainnet url username")
+	flag.StringVar(&mainnetPassword, "mainnetPassword", "", "mainnet url password")
+	flag.Int64Var(&lastRescanHeight, "lastRescanHeight", 1, "last rescan mainnet height")
+	flag.Int64Var(&lastRescanTime, "lastRescanTime", 0, "last rescan time")
+	flag.Parse()
+	c, err := ethclient.Dial(sideChainUrl)
+	if err != nil {
+		panic(err)
 	}
-	go func() {
-		for /* get side chain block height*/ {
-			height := int64(0)
-			err := c.sideChainBlockScanner.ScanBlock(context.Background(), height)
-			if err != nil {
-				panic(err)
-			}
-		}
-	}()
-	go func() {
-		for /* get main chain block height*/ {
-			height := int64(0)
-			err := c.mainnetBlockWatcher.HandleBlock(height)
-			if err != nil {
-				panic(err)
-			}
-			c.lock.Lock()
-			c.currMainnetHeight = height
-			c.lock.Unlock()
-			if c.checkCallStartRescan() {
-				sendStartRescan(height)
-			}
-		}
-	}()
-	go func() {
-		for {
-			time.Sleep(30 * time.Second)
-			err := c.operatorsWatcher.Check()
-			if err != nil {
-				panic(err)
-			}
-		}
-	}()
+	connCfg := &rpcclient.ConnConfig{
+		Host:         mainnetUrl,
+		User:         mainnetUsername,
+		Pass:         mainnetPassword,
+		HTTPPostMode: true,
+		DisableTLS:   true,
+	}
+	client, err := rpcclient.New(connCfg, nil)
+	if err != nil {
+		panic(err)
+	}
+	bz, err := hex.DecodeString(monitorPrivateKey)
+	if err == nil {
+		monitor.MyPrivKey, err = crypto.ToECDSA(bz)
+	}
+	if err != nil {
+		fmt.Println("Cannot decode monitor private key hex string")
+		panic(err)
+	}
+	monitor.MyAddress = crypto.PubkeyToAddress(monitor.MyPrivKey.PublicKey)
+	//defer client.Shutdown()
+	monitor.SendStartRescanAndHandleUTXO(context.Background(), c, client, lastRescanHeight, lastRescanTime, handleUtxoDelay)
 	select {}
 }
