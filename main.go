@@ -74,7 +74,7 @@ const (
 func main() {
 	flag.StringVar(&monitorPrivateKey, "key", "", "monitor private key")
 	flag.StringVar(&sideChainUrl, "sbchUrl", "http://localhost:8545", "side chain rpc url")
-	flag.StringVar(&mainnetUrl, "mainnetUrl", "http://localhost:8332", "mainnet url")
+	flag.StringVar(&mainnetUrl, "mainnetUrl", "localhost:8332", "mainnet url")
 	flag.StringVar(&mainnetUsername, "mainnetUsername", "", "mainnet url username")
 	flag.StringVar(&mainnetPassword, "mainnetPassword", "", "mainnet url password")
 	flag.Int64Var(&lastRescanHeight, "lastRescanHeight", 1, "last rescan mainnet height")

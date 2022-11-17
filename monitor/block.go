@@ -29,7 +29,7 @@ func SendStartRescanAndHandleUTXO(ctx context.Context, client *ethclient.Client,
 		_, err := bchClient.GetBlockHash(height + 9)
 		if err != nil {
 			time.Sleep(30 * time.Second)
-			fmt.Printf("get block hash err:%s\n", err)
+			fmt.Printf("get block %d hash err:%s\n", height+9, err)
 			continue
 		}
 		fmt.Printf("mainnet height:%d\n", height)

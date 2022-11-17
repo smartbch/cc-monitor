@@ -108,10 +108,11 @@ func sendTransaction(ctx context.Context, client *ethclient.Client, from, to com
 	if err != nil {
 		return common.Hash{}, err
 	}
-	gasPrice, err := client.SuggestGasPrice(ctx)
-	if err != nil {
-		return common.Hash{}, err
-	}
+	//gasPrice, err := client.SuggestGasPrice(ctx)
+	//if err != nil {
+	//	return common.Hash{}, err
+	//}
+	gasPrice := big.NewInt(10_000_000_000)
 	gasLimit, err := client.EstimateGas(ctx, ethereum.CallMsg{
 		To:   &to,
 		Data: callData,
@@ -119,6 +120,7 @@ func sendTransaction(ctx context.Context, client *ethclient.Client, from, to com
 	if err != nil {
 		return common.Hash{}, err
 	}
+	fmt.Printf("gasPrice:%s,gasLimit:%d\n", gasPrice.String(), gasLimit)
 	value := big.NewInt(0)
 	tx := types.NewTransaction(nonce, CCAddress, value, gasLimit, gasPrice, callData)
 	chainID, err := client.NetworkID(ctx)
