@@ -32,7 +32,6 @@ func SendStartRescanAndHandleUTXO(ctx context.Context, client *ethclient.Client,
 			continue
 		}
 		if lastRescanHeight+2 <= height {
-			fmt.Println("send startRescan tx")
 			txHash, err := sendStartRescanTransaction(ctx, client, height)
 			if err != nil {
 				fmt.Printf("Error in sendStartRescanTransaction: %#v\n", err)
@@ -40,8 +39,9 @@ func SendStartRescanAndHandleUTXO(ctx context.Context, client *ethclient.Client,
 			time.Sleep(12 * time.Second)
 			err = checkTxStatus(ctx, client, txHash)
 			if err != nil {
-				fmt.Printf("startRescan executed failed: %s\n", err.Error())
+				fmt.Printf("startRescan executed failed: %s,%s\n", err.Error(), txHash.String())
 			} else {
+				fmt.Printf("startRescan executed success, %s\n", txHash.String())
 				lastRescanHeight = height
 				lastRescanTime = time.Now().Unix()
 				sendHandleUtxo = true
@@ -49,7 +49,6 @@ func SendStartRescanAndHandleUTXO(ctx context.Context, client *ethclient.Client,
 		}
 		time.Sleep(30 * time.Second)
 		if lastRescanTime+handleUtxoDelay < time.Now().Unix() && sendHandleUtxo {
-			fmt.Println("send handleUtxo tx")
 			txHash, err := sendHandleUtxoTransaction(ctx, client)
 			if err != nil {
 				fmt.Printf("Error in sendHandleUtxoTransaction: %#v\n", err)
@@ -58,8 +57,9 @@ func SendStartRescanAndHandleUTXO(ctx context.Context, client *ethclient.Client,
 			time.Sleep(12 * time.Second)
 			err = checkTxStatus(ctx, client, txHash)
 			if err != nil {
-				fmt.Printf("handleUtxo executed failed: %s\n", err.Error())
+				fmt.Printf("handleUtxo executed failed: %s,%s\n", err.Error(), txHash.String())
 			} else {
+				fmt.Printf("handleUtxo executed success, %s\n", txHash.String())
 				sendHandleUtxo = false
 			}
 		}
