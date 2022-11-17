@@ -29,8 +29,10 @@ func SendStartRescanAndHandleUTXO(ctx context.Context, client *ethclient.Client,
 		_, err := bchClient.GetBlockHash(height + 9)
 		if err != nil {
 			time.Sleep(30 * time.Second)
+			fmt.Printf("get block hash err:%s\n", err)
 			continue
 		}
+		fmt.Printf("mainnet height:%d\n", height)
 		if lastRescanHeight+2 <= height {
 			txHash, err := sendStartRescanTransaction(ctx, client, height)
 			if err != nil {

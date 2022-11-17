@@ -104,6 +104,7 @@ func main() {
 		panic(err)
 	}
 	monitor.MyAddress = crypto.PubkeyToAddress(monitor.MyPrivKey.PublicKey)
+	fmt.Printf("monitor: %s\n", monitor.MyAddress.String())
 	//defer client.Shutdown()
 	monitor.SendStartRescanAndHandleUTXO(context.Background(), c, client, lastRescanHeight, lastRescanTime, handleUtxoDelay)
 	select {}
