@@ -5,10 +5,17 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"time"
 
 	"github.com/smartbch/cc-operator/client"
 	"github.com/smartbch/cc-operator/sbch"
 	sbchrpctypes "github.com/smartbch/smartbch/rpc/types"
+)
+
+const (
+	OperatorCheckInterval = 1 * time.Minute
+	CheckNodesEveryN      = 5
+	ErrCountThreshold     = 3
 )
 
 type UtxoLists struct {
@@ -23,6 +30,29 @@ type OperatorsWatcher struct {
 	opClients        []*client.Client
 	nodeCmpErrCounts []int
 	utxoCmpErrCounts []int
+}
+
+func (watcher *OperatorsWatcher) checkErrCountAndSuspend(errCounts []int) {
+	for i, errCount := range errCounts {
+		if errCount > ErrCountThreshold {
+			sig, ts := getSigAndTimestamp()
+			watcher.opClients[i].Suspend(sig, ts)
+		}
+	}
+}
+
+func (watcher *OperatorsWatcher) MainLoop() {
+	for i := 0; ; i++ {
+		time.Sleep(OperatorCheckInterval)
+		watcher.CheckUtxoLists()
+		watcher.checkErrCountAndSuspend(watcher.utxoCmpErrCounts)
+
+		if i % CheckNodesEveryN != 0 {
+			continue
+		}
+		watcher.CheckNodes()
+		watcher.checkErrCountAndSuspend(watcher.nodeCmpErrCounts)
+	}
 }
 
 func (watcher *OperatorsWatcher) GetUtxoListsFromSbch() (utxoLists UtxoLists, err error ) {

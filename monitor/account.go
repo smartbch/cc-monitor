@@ -19,7 +19,10 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 	ccabi "github.com/smartbch/smartbch/crosschain/abi"
+	sbchrpcclient "github.com/smartbch/smartbch/rpc/client"
 )
+
+const RetryThreshold = 10
 
 var (
 	MyPrivKey *ecdsa.PrivateKey
@@ -74,24 +77,111 @@ func readPrivKey() {
 	MyAddress = crypto.PubkeyToAddress(MyPrivKey.PublicKey)
 }
 
-func sendPauseTransaction(ctx context.Context, client *ethclient.Client) (common.Hash, error) {
+func sendPauseTransaction(ctx context.Context, client *ethclient.Client) error {
+	errCount := 0
 	callData := ccabi.PackPauseFunc()
-	return sendTransaction(ctx, client, MyAddress, CCAddress, callData)
+	for errCount < RetryThreshold {
+		txHash, err := sendTransaction(ctx, client, MyAddress, CCAddress, callData)
+		if err != nil {
+			fmt.Printf("Error in sendPauseTransaction: %s\n", err.Error())
+			errCount++
+			continue
+		}
+		time.Sleep(12 * time.Second)
+		err = checkTxStatus(ctx, client, txHash)
+		if err != nil {
+			fmt.Printf("Error in sendPauseTransaction-checkTxStatus: %s\n", err.Error())
+			errCount++
+			continue
+		} else {
+			break
+		}
+	}
+	if errCount >= RetryThreshold {
+		return errors.New("sendPauseTransaction reaches retry threshold")
+	}
+	return nil
 }
 
-func sendResumeTransaction(ctx context.Context, client *ethclient.Client) (common.Hash, error) {
+func sendResumeTransaction(ctx context.Context, client *ethclient.Client) error {
+	errCount := 0
 	callData := ccabi.PackResumeFunc()
-	return sendTransaction(ctx, client, MyAddress, CCAddress, callData)
+	for errCount < RetryThreshold {
+		txHash, err := sendTransaction(ctx, client, MyAddress, CCAddress, callData)
+		if err != nil {
+			fmt.Printf("Error in sendResumeTransaction: %s\n", err.Error())
+			errCount++
+			continue
+		}
+		time.Sleep(12 * time.Second)
+		err = checkTxStatus(ctx, client, txHash)
+		if err != nil {
+			fmt.Printf("Error in sendResumeTransaction-checkTxStatus: %s\n", err.Error())
+			errCount++
+			continue
+		} else {
+			break
+		}
+	}
+	if errCount >= RetryThreshold {
+		return errors.New("sendPauseTransaction reaches retry threshold")
+	}
+	return nil
 }
 
-func sendStartRescanTransaction(ctx context.Context, client *ethclient.Client, height int64) (common.Hash, error) {
-	callData := ccabi.PackStartRescanFunc(big.NewInt(height))
-	return sendTransaction(ctx, client, MyAddress, CCAddress, callData)
+func sendStartRescanTransaction(ctx context.Context, client *ethclient.Client, sbchClient *sbchrpcclient.Client,
+	lastRescanHeight, rescanHeight int64) error {
+	errCount := 0
+	callData := ccabi.PackStartRescanFunc(big.NewInt(rescanHeight))
+	for errCount < RetryThreshold {
+		_, err := sendTransaction(ctx, client, MyAddress, CCAddress, callData)
+		if err != nil {
+			fmt.Printf("Error in sendStartRescanTransaction: %s\n", err.Error())
+			errCount++
+			continue
+		}
+		time.Sleep(12 * time.Second)
+		ccInfo, err := sbchClient.CcInfo(ctx)
+		if err != nil {
+			fmt.Printf("Error in sendStartRescanTransaction-CcInfo: %s\n", err.Error())
+			errCount++
+			continue
+		}
+		if int64(ccInfo.LastRescannedHeight) != lastRescanHeight {
+			break
+		}
+	}
+	if errCount >= RetryThreshold {
+		return errors.New("sendPauseTransaction reaches retry threshold")
+	}
+	return nil
 }
 
-func sendHandleUtxoTransaction(ctx context.Context, client *ethclient.Client) (common.Hash, error) {
+func sendHandleUtxoTransaction(ctx context.Context, client *ethclient.Client, sbchClient *sbchrpcclient.Client) error {
+	errCount := 0
 	callData := ccabi.PackHandleUTXOsFunc()
-	return sendTransaction(ctx, client, MyAddress, CCAddress, callData)
+	for errCount < RetryThreshold {
+		_, err := sendTransaction(ctx, client, MyAddress, CCAddress, callData)
+		if err != nil {
+			fmt.Printf("Error in sendStartRescanTransaction: %s\n", err.Error())
+			errCount++
+			continue
+		}
+		time.Sleep(12 * time.Second)
+		ccInfo, err := sbchClient.CcInfo(ctx)
+		if err != nil {
+			fmt.Printf("Error in sendStartRescanTransaction-CcInfo: %s\n", err.Error())
+			errCount++
+			continue
+		}
+		if ccInfo.UTXOAlreadyHandled {
+			break
+		}
+	}
+	if errCount >= RetryThreshold {
+		return errors.New("sendPauseTransaction reaches retry threshold")
+	}
+	return nil
 }
 
 func sendPauseOperator() error {

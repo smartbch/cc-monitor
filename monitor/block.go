@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"gorm.io/gorm"
+	"math/big"
 	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -21,6 +22,8 @@ import (
 	"github.com/gcash/bchd/txscript"
 	"github.com/gcash/bchd/wire"
 	mevmtypes "github.com/smartbch/moeingevm/types"
+	ccabi "github.com/smartbch/smartbch/crosschain/abi"
+	sbchrpcclient "github.com/smartbch/smartbch/rpc/client"
 )
 
 const (
@@ -47,7 +50,8 @@ func SendStartRescanAndHandleUTXO(ctx context.Context, client *ethclient.Client,
 		}
 		fmt.Printf("mainnet height:%d\n", height)
 		if lastRescanHeight+2 <= height {
-			txHash, err := sendStartRescanTransaction(ctx, client, height)
+			callData := ccabi.PackStartRescanFunc(big.NewInt(height))
+			txHash, err := sendTransaction(ctx, client, MyAddress, CCAddress, callData)
 			if err != nil {
 				fmt.Printf("Error in sendStartRescanTransaction: %#v\n", err)
 			}
@@ -64,7 +68,8 @@ func SendStartRescanAndHandleUTXO(ctx context.Context, client *ethclient.Client,
 		}
 		time.Sleep(30 * time.Second)
 		if lastRescanTime+handleUtxoDelay < time.Now().Unix() && sendHandleUtxo {
-			txHash, err := sendHandleUtxoTransaction(ctx, client)
+			callData := ccabi.PackHandleUTXOsFunc()
+			txHash, err := sendTransaction(ctx, client, MyAddress, CCAddress, callData)
 			if err != nil {
 				fmt.Printf("Error in sendHandleUtxoTransaction: %#v\n", err)
 			}
@@ -105,7 +110,7 @@ func Catchup(bs *BlockScanner, client *ethclient.Client, endHeight int64) {
 	}
 }
 
-func MainLoop(bs *BlockScanner, client *ethclient.Client) {
+func MainLoop(bs *BlockScanner, client *ethclient.Client, sbchClient *sbchrpcclient.Client) {
 	ctx := context.Background()
 	metaInfo := getMetaInfo(bs.db)
 	height := metaInfo.SideChainHeight
@@ -118,7 +123,7 @@ func MainLoop(bs *BlockScanner, client *ethclient.Client) {
 		}
 		metaInfo = getMetaInfo(bs.db) // MetaInfo may get updated during processing, so we reload it
 		if metaInfo.LastRescanTime > 0 && metaInfo.LastRescanTime + SendHandleUtxoDelay < time.Now().Unix() {
-			sendHandleUtxoTransaction(ctx, client) // TODO it will loop util succeed
+			sendHandleUtxoTransaction(ctx, client, sbchClient) // TODO it will loop util succeed
 		}
 		bs.CheckSlidingWindow(ctx, timestamp, client, &metaInfo)
 		// check mainchain's new blocks every 20 sidechain blocks
@@ -132,7 +137,7 @@ func MainLoop(bs *BlockScanner, client *ethclient.Client) {
 				}
 			}
 			if needRescan {
-				sendStartRescanTransaction(ctx, client, height)
+				sendStartRescanTransaction(ctx, client, sbchClient, height, metaInfo.ScannedHeight)
 			}
 		}
 		err = bs.ScanBlock(ctx, timestamp, height, client)
