@@ -8,14 +8,88 @@ import (
 
 	"github.com/smartbch/cc-operator/client"
 	"github.com/smartbch/cc-operator/sbch"
+	sbchrpctypes "github.com/smartbch/smartbch/rpc/types"
 )
 
-type OperatorsWatcher struct {
-	sbchClient *sbch.SimpleRpcClient
-	opClients  []*client.Client
+type UtxoLists struct {
+	RedeemingUtxosForOperators     []*sbchrpctypes.UtxoInfo
+	RedeemingUtxosForMonitors      []*sbchrpctypes.UtxoInfo
+	ToBeConvertedUtxosForOperators []*sbchrpctypes.UtxoInfo
+	ToBeConvertedUtxosForMonitors  []*sbchrpctypes.UtxoInfo
 }
 
-func (watcher *OperatorsWatcher) Check() error {
+type OperatorsWatcher struct {
+	sbchClient       *sbch.SimpleRpcClient
+	opClients        []*client.Client
+	nodeCmpErrCounts []int
+	utxoCmpErrCounts []int
+}
+
+func (watcher *OperatorsWatcher) GetUtxoListsFromSbch() (utxoLists UtxoLists, err error ) {
+	utxoLists.RedeemingUtxosForOperators, err = watcher.sbchClient.GetRedeemingUtxosForOperators()
+	if err != nil {
+		return
+	}
+	utxoLists.RedeemingUtxosForMonitors, err = watcher.sbchClient.GetRedeemingUtxosForMonitors()
+	if err != nil {
+		return
+	}
+	utxoLists.ToBeConvertedUtxosForOperators, err = watcher.sbchClient.GetToBeConvertedUtxosForOperators()
+	if err != nil {
+		return
+	}
+	utxoLists.ToBeConvertedUtxosForMonitors, err = watcher.sbchClient.GetToBeConvertedUtxosForMonitors()
+	if err != nil {
+		return
+	}
+	return
+}
+
+func GetUtxoListsFromOperator(opClient *client.Client) (utxoLists UtxoLists, err error ) {
+	utxoLists.RedeemingUtxosForOperators, err = opClient.GetRedeemingUtxosForOperators()
+	if err != nil {
+		return
+	}
+	utxoLists.RedeemingUtxosForMonitors, err = opClient.GetRedeemingUtxosForMonitors()
+	if err != nil {
+		return
+	}
+	utxoLists.ToBeConvertedUtxosForOperators, err = opClient.GetToBeConvertedUtxosForOperators()
+	if err != nil {
+		return
+	}
+	utxoLists.ToBeConvertedUtxosForMonitors, err = opClient.GetToBeConvertedUtxosForMonitors()
+	if err != nil {
+		return
+	}
+	return
+}
+
+func (watcher *OperatorsWatcher) CheckUtxoLists() error {
+	refUtxoLists, err := watcher.GetUtxoListsFromSbch()
+	if err != nil {
+		fmt.Println("GetUtxoListsFromSbch failed:", err)
+		return err
+	}
+
+	for i, opClient := range watcher.opClients {
+		utxoLists, err := GetUtxoListsFromOperator(opClient)
+		if err != nil {
+			fmt.Println("GetUtxoListsFromOperator failed:", err)
+			continue
+		}
+
+		if !reflect.DeepEqual(refUtxoLists, utxoLists) {
+			fmt.Println("utxoLists not match: ", opClient.RpcURL())
+			watcher.utxoCmpErrCounts[i]++
+		} else {
+			watcher.utxoCmpErrCounts[i] = 0
+		}
+	}
+	return nil
+}
+
+func (watcher *OperatorsWatcher) CheckNodes() error {
 	latestNodes, err := watcher.sbchClient.GetSbchdNodes()
 	if err != nil {
 		fmt.Println("GetSbchdNodes failed:", err)
@@ -23,7 +97,7 @@ func (watcher *OperatorsWatcher) Check() error {
 	}
 
 	sortNodes(latestNodes)
-	for _, opClient := range watcher.opClients {
+	for i, opClient := range watcher.opClients {
 		currNodes, err := opClient.GetNodes()
 		if err != nil {
 			fmt.Println("GetNodes from operator failed:", err)
@@ -40,9 +114,10 @@ func (watcher *OperatorsWatcher) Check() error {
 		sortNodes(newNodes)
 		if !reflect.DeepEqual(latestNodes, currNodes) &&
 			!reflect.DeepEqual(latestNodes, newNodes) {
-
 			fmt.Println("nodes not match: ", opClient.RpcURL())
-			// TODO
+			watcher.nodeCmpErrCounts[i]++
+		} else {
+			watcher.nodeCmpErrCounts[i] = 0
 		}
 	}
 

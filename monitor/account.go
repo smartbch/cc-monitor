@@ -14,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum"
 	gethacc "github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -95,7 +96,7 @@ func sendHandleUtxoTransaction(ctx context.Context, client *ethclient.Client) (c
 
 func sendPauseOperator() error {
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
-	hash, _ := gethacc.TextAndHash([]byte(ts))
+	hash := gethacc.TextHash([]byte(ts))
 	sig, err := crypto.Sign(hash, MyPrivKey)
 	if err != nil {
 		panic(err)
@@ -144,3 +145,15 @@ func checkTxStatus(ctx context.Context, client *ethclient.Client, txHash common.
 	}
 	return nil
 }
+
+func getSigAndTimestamp() (sig string, ts int64) {
+	ts = time.Now().Unix()
+	hash := gethacc.TextHash([]byte(fmt.Sprintf("%d", ts)))
+	signature, err := crypto.Sign(hash, MyPrivKey)
+	if err != nil {
+		panic(err)
+	}
+	sig = hexutil.Encode(signature)
+	return
+}
+

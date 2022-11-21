@@ -8,7 +8,7 @@ require (
 	github.com/gcash/bchd v0.19.0
 	github.com/gcash/bchutil v0.0.0-20210113190856-6ea28dff4000
 	github.com/smartbch/moeingevm v0.4.2-0.20220509120345-27a3d288346f
-	github.com/smartbch/smartbch v0.4.5-0.20221114033713-dca62a9f1aeb
+	github.com/smartbch/smartbch v0.4.5-0.20221121011306-24c5ce951a76
 	gorm.io/driver/sqlite v1.3.6
 	gorm.io/gorm v1.23.8
 )
@@ -37,7 +37,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/sasha-s/go-deadlock v0.2.1-0.20190427202633-1595213edefa // indirect
 	github.com/shirou/gopsutil v3.21.4-0.20210419000835-c7a38de76ee5+incompatible // indirect
-	github.com/smartbch/cc-operator v0.0.0-20221115063752-495ab666dc6a // indirect
+	github.com/smartbch/cc-operator v0.0.0-20221121012319-1b9f3269eff6 // indirect
 	github.com/smartbch/moeingads v0.4.2 // indirect
 	github.com/smartbch/moeingdb v0.4.4-0.20220901031017-07b13bf12c62 // indirect
 	github.com/tendermint/tendermint v0.34.10 // indirect
@@ -48,3 +48,5 @@ require (
 	golang.org/x/sys v0.0.0-20220520151302-bc2c85ada10a // indirect
 	gopkg.in/natefinch/npipe.v2 v2.0.0-20160621034901-c1b8fa8bdcce // indirect
 )
+
+replace github.com/smartbch/cc-operator => ../cc-operator
