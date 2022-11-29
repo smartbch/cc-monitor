@@ -3,6 +3,7 @@ package monitor
 import (
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime/debug"
@@ -28,7 +29,7 @@ const (
 )
 
 /* State Transitions:
-ToBeRecognized     (sideEvtRedeem)           Redeeming
+ToBeRecognized     (sideEvtRedeem)           Redeeming (burning address)
 ToBeRecognized     (sideEvtRedeemable)       Redeemable
 ToBeRecognized     (sideEvtLostAndFound)     LostAndFound
 Redeemable         (sideEvtRedeem)           Redeeming
@@ -44,9 +45,7 @@ RedeemingToDel     (sideEvtDeleted)          DELETED
 
 var (
 	ErrNoBlockFoundAtGivenHeight = errors.New("No Block Found at the Given Height")
-)
 
-var (
 	EventNewRedeemable   = crypto.Keccak256Hash([]byte("NewRedeemable(uint256,uint32,address)"))
 	EventNewLostAndFound = crypto.Keccak256Hash([]byte("NewLostAndFound(uint256,uint32,address)"))
 	EventRedeem          = crypto.Keccak256Hash([]byte("Redeem(uint256,uint32,address,uint8)"))
@@ -56,7 +55,7 @@ var (
 
 	// main chain burn address legacy format: 1SmartBCHBurnAddressxxxxxxy31qJGb
 	MainChainBurningAddress string = "qqzdl8vlah353f0cyvmuapag9xlzyq9w6cul36akp5" //cash address format
-	BurnAddressMainChain = []byte("\x04\xdf\x9d\x9f\xed\xe3\x48\xa5\xf8\x23\x37\xce\x87\xa8\x29\xbe\x22\x00\xae\xd6")
+	BurnAddressMainChain = "\x04\xdf\x9d\x9f\xed\xe3\x48\xa5\xf8\x23\x37\xce\x87\xa8\x29\xbe\x22\x00\xae\xd6"
 )
 
 const (
@@ -64,6 +63,8 @@ const (
 	FromLostAndFound = uint8(1) // when it's redeemed or deleted
 	FromRedeeming    = uint8(2) // when it's deleted
 	FromBurnRedeem   = uint8(9) // when it's automatically redeemed to burning address
+
+	ZeroX24Json = "[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]"
 )
 
 type FatalError struct {
@@ -86,6 +87,8 @@ type CcUtxo struct {
 	Amount       int64
 	Txid         string
 	Vout         uint32
+	NewTxid      string
+	NewVout      uint32
 }
 
 type MetaInfo struct {
@@ -96,25 +99,51 @@ type MetaInfo struct {
 	SideChainHeight  int64
 	CurrCovenantAddr string
 	LastCovenantAddr string
-	AmountX24        [24]int64 // The total amount transferred in each hour in the past 24 hours
-	TimestampX24     [24]int64 // the corresponding hour of the slots in AmountX24
+	AmountX24        string // The total amount transferred in each hour in the past 24 hours
+	TimestampX24     string // the corresponding hour-number of the slots in AmountX24
 	IsPaused         bool
 }
 
 func (m *MetaInfo) incrAmountInSlidingWindow(amount, currTime int64) {
 	hour := currTime/3600
 	slot := hour%24;
-	if hour != m.TimestampX24[slot] { // if this slot is out of sliding window
-		m.AmountX24[slot] = 0 // reset the amount
-		m.TimestampX24[slot] = hour // update the time
+	var timestampX24 []int64
+	var amountX24 []int64
+	if err := json.Unmarshal([]byte(m.TimestampX24), &timestampX24); err != nil {
+		panic(err)
 	}
-	m.AmountX24[slot] += amount
+	if err := json.Unmarshal([]byte(m.AmountX24), &amountX24); err != nil {
+		panic(err)
+	}
+	if hour != timestampX24[slot] { // if this slot is out of sliding window (more than 24 hours ago)
+		amountX24[slot] = 0 // reset the amount
+		timestampX24[slot] = hour // update the hour-number
+	}
+	amountX24[slot] += amount
+	if bz, err := json.Marshal(timestampX24); err != nil {
+		panic(err)
+	} else {
+		m.TimestampX24 = string(bz);
+	}
+	if bz, err := json.Marshal(amountX24); err != nil {
+		panic(err)
+	} else {
+		m.AmountX24 = string(bz);
+	}
 }
 
 func (m *MetaInfo) getSumInSlidingWindow(currTime int64) (sum int64) {
+	var timestampX24 []int64
+	var amountX24 []int64
+	if err := json.Unmarshal([]byte(m.TimestampX24), &timestampX24); err != nil {
+		panic(err)
+	}
+	if err := json.Unmarshal([]byte(m.AmountX24), &amountX24); err != nil {
+		panic(err)
+	}
 	hour := currTime/3600
-	for i, a := range m.AmountX24 {
-		if hour - 24 <= m.TimestampX24[i] {
+	for i, a := range amountX24 {
+		if hour - 24 <= timestampX24[i] {
 			sum += a
 		}
 	}
@@ -128,7 +157,14 @@ type ConvertParams struct {
 }
 
 func MigrateSchema(db *gorm.DB) {
-	db.AutoMigrate(&CcUtxo{})
+	db.AutoMigrate(&CcUtxo{
+		Type:         Redeemable,
+		CovenantAddr: "CovenantAddr",
+		RedeemTarget: "RedeemTarget",
+		Amount:       1,
+		Txid:         "txid",
+		Vout:         1,
+	})
 	db.AutoMigrate(&MetaInfo{})
 }
 
@@ -148,12 +184,20 @@ func getMetaInfo(tx *gorm.DB) (info MetaInfo) {
 	return info
 }
 
+func initMetaInfo(tx *gorm.DB, info *MetaInfo) {
+	info.TimestampX24 = ZeroX24Json
+	info.AmountX24 = ZeroX24Json
+	result := tx.Create(&info)
+	if result.Error != nil {
+		panic(result.Error)
+	}
+}
+
 func updateLastRescanTime(tx *gorm.DB, lastRescanTime int64) error {
 	var oldInfo MetaInfo
 	result := tx.First(&oldInfo)
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-		debug.PrintStack()
-		return NewFatal("Cannot find MetaInfo, during updateLastRescanTime")
+		panic(result.Error)
 	}
 	tx.Model(&oldInfo).Update("LastRescanTime", lastRescanTime)
 	return nil
@@ -163,8 +207,7 @@ func updateMainChainHeight(tx *gorm.DB, mainChainHeight int64) error {
 	var oldInfo MetaInfo
 	result := tx.First(&oldInfo)
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-		debug.PrintStack()
-		return NewFatal("Cannot find MetaInfo, during updateMainChainHeight")
+		panic(result.Error)
 	}
 	tx.Model(&oldInfo).Update("MainChainHeight", mainChainHeight)
 	return nil
@@ -174,8 +217,7 @@ func updateCovenantAddr(tx *gorm.DB, lastAddr, currAddr string) error {
 	var oldInfo MetaInfo
 	result := tx.First(&oldInfo)
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-		debug.PrintStack()
-		return NewFatal("Cannot find MetaInfo, during updateCovenantAddr")
+		panic(result.Error)
 	}
 	tx.Model(&oldInfo).Updates(MetaInfo{CurrCovenantAddr: currAddr, LastCovenantAddr: lastAddr})
 	return nil
@@ -204,15 +246,15 @@ func addToBeRecognized(tx *gorm.DB, newCcUtxo CcUtxo) error {
 	result := tx.First(&utxo, "txid == ? AND vout == ?", newCcUtxo.Txid, newCcUtxo.Vout)
 	if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		debug.PrintStack()
-		s := fmt.Sprintf("Txid=%s vout=%d\n%s\n", hex.EncodeToString([]byte(newCcUtxo.Txid)), newCcUtxo.Vout, utxo)
-		return NewFatal("[addToBeRecognized] This UTXO was already already added: "+s)
+		s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", hex.EncodeToString([]byte(newCcUtxo.Txid)), newCcUtxo.Vout, utxo)
+		return NewFatal("[addToBeRecognized] This UTXO was already added: "+s)
 	}
 
 	result = tx.Create(&newCcUtxo)
 
 	if result.Error != nil {
 		debug.PrintStack()
-		s := fmt.Sprintf("Txid=%s vout=%d\n%s\n", hex.EncodeToString([]byte(newCcUtxo.Txid)), newCcUtxo.Vout, utxo)
+		s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", hex.EncodeToString([]byte(newCcUtxo.Txid)), newCcUtxo.Vout, utxo)
 		return NewFatal("[addToBeRecognized] Cannot create new entry: "+s)
 	}
 	return nil
@@ -228,12 +270,12 @@ func sideEvtRedeemable(tx *gorm.DB, covenantAddr string, txid string, vout uint3
 	}
 	if utxo.Type != ToBeRecognized {
 		debug.PrintStack()
-		s := fmt.Sprintf("Txid=%s vout=%d\n%s\n", hex.EncodeToString([]byte(txid)), vout, utxo)
+		s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", hex.EncodeToString([]byte(txid)), vout, utxo)
 		return NewFatal("[sideEvtRedeemable] UTXO's old type is not ToBeRecognized "+s)
 	}
 	if utxo.CovenantAddr != covenantAddr {
 		debug.PrintStack()
-		s := fmt.Sprintf("Txid=%s vout=%d\n%s\n", hex.EncodeToString([]byte(txid)), vout, utxo)
+		s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", hex.EncodeToString([]byte(txid)), vout, utxo)
 		return NewFatal(fmt.Sprintf("[sideEvtRedeemable] UTXO's recorded covenantAddr (%s) is not %s"+s,
 			hex.EncodeToString([]byte(utxo.CovenantAddr)), hex.EncodeToString([]byte(covenantAddr))))
 	}
@@ -251,12 +293,12 @@ func sideEvtLostAndFound(tx *gorm.DB, covenantAddr string, txid string, vout uin
 	}
 	if utxo.Type != ToBeRecognized {
 		debug.PrintStack()
-		s := fmt.Sprintf("Txid=%s vout=%d\n%s\n", hex.EncodeToString([]byte(txid)), vout, utxo)
+		s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", hex.EncodeToString([]byte(txid)), vout, utxo)
 		return NewFatal("[sideEvtLostAndFound] UTXO's old type is not ToBeRecognized "+s)
 	}
 	if utxo.CovenantAddr != covenantAddr {
 		debug.PrintStack()
-		s := fmt.Sprintf("Txid=%s vout=%d\n%s\n", hex.EncodeToString([]byte(txid)), vout, utxo)
+		s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", hex.EncodeToString([]byte(txid)), vout, utxo)
 		return NewFatal(fmt.Sprintf("[sideEvtLostAndFound] UTXO's recorded covenantAddr (%s) is not %s"+s,
 			hex.EncodeToString([]byte(utxo.CovenantAddr)), hex.EncodeToString([]byte(covenantAddr))))
 	}
@@ -275,14 +317,14 @@ func sideEvtRedeem(tx *gorm.DB, covenantAddr string, txid string, vout uint32, s
 	}
 	if utxo.CovenantAddr != covenantAddr {
 		debug.PrintStack()
-		s := fmt.Sprintf("Txid=%s vout=%d\n%s\n", hex.EncodeToString([]byte(txid)), vout, utxo)
+		s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", hex.EncodeToString([]byte(txid)), vout, utxo)
 		return NewFatal(fmt.Sprintf("[sideEvtRedeem] UTXO's recorded covenantAddr (%s) is not %s"+s,
 			hex.EncodeToString([]byte(utxo.CovenantAddr)), hex.EncodeToString([]byte(covenantAddr))))
 	}
 	if sourceType == FromRedeemable {
 		if utxo.Type != Redeemable {
 			debug.PrintStack()
-			s := fmt.Sprintf("Txid=%s vout=%d\n%s\n", hex.EncodeToString([]byte(txid)), vout, utxo)
+			s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", hex.EncodeToString([]byte(txid)), vout, utxo)
 			return NewFatal("[sideEvtRedeem] UTXO's old type is not Redeemable "+s)
 		}
 		tx.Model(&utxo).Updates(CcUtxo{Type: Redeeming, RedeemTarget: redeemTarget})
@@ -291,7 +333,7 @@ func sideEvtRedeem(tx *gorm.DB, covenantAddr string, txid string, vout uint32, s
 	} else if sourceType == FromLostAndFound {
 		if utxo.Type != LostAndFound {
 			debug.PrintStack()
-			s := fmt.Sprintf("Txid=%s vout=%d\n%s\n", hex.EncodeToString([]byte(txid)), vout, utxo)
+			s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", hex.EncodeToString([]byte(txid)), vout, utxo)
 			return NewFatal("[sideEvtRedeem] UTXO's old type is not LostAndFound "+s)
 		}
 		tx.Model(&utxo).Updates(CcUtxo{Type: LostAndReturn, RedeemTarget: redeemTarget})
@@ -300,12 +342,12 @@ func sideEvtRedeem(tx *gorm.DB, covenantAddr string, txid string, vout uint32, s
 	} else if sourceType == FromBurnRedeem {
 		if utxo.Type != ToBeRecognized {
 			debug.PrintStack()
-			s := fmt.Sprintf("Txid=%s vout=%d\n%s\n", hex.EncodeToString([]byte(txid)), vout, utxo)
+			s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", hex.EncodeToString([]byte(txid)), vout, utxo)
 			return NewFatal("[sideEvtRedeem] UTXO's old type is not ToBeRecognized "+s)
 		}
-		if redeemTarget != MainChainBurningAddress {
+		if redeemTarget != BurnAddressMainChain {
 			debug.PrintStack()
-			s := fmt.Sprintf("Txid=%s vout=%d\n%s\n", hex.EncodeToString([]byte(txid)), vout, utxo)
+			s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", hex.EncodeToString([]byte(txid)), vout, utxo)
 			return NewFatal("[sideEvtRedeem] UTXO's redeem target is not BurningAddr " + s +
 				"target: "+ hex.EncodeToString([]byte(redeemTarget)))
 		}
@@ -314,7 +356,7 @@ func sideEvtRedeem(tx *gorm.DB, covenantAddr string, txid string, vout uint32, s
 		return nil
 	}
 	debug.PrintStack()
-	s := fmt.Sprintf("sourceType=%d Txid=%s vout=%d\n%s\n", sourceType, hex.EncodeToString([]byte(txid)), vout, utxo)
+	s := fmt.Sprintf("sourceType=%d Txid=%s vout=%d\n%#v\n", sourceType, hex.EncodeToString([]byte(txid)), vout, utxo)
 	return NewFatal("[sideEvtRedeem] Invalid sidechain event has invalid sourceType: "+s)
 }
 
@@ -328,27 +370,22 @@ func mainEvtRedeemOrReturn(tx *gorm.DB, txid string, vout uint32, receiver strin
 	}
 	if utxo.Type != Redeeming && utxo.Type != LostAndReturn {
 		debug.PrintStack()
-		s := fmt.Sprintf("Txid=%s vout=%d\n%s\n", hex.EncodeToString([]byte(txid)), vout, utxo)
+		s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", hex.EncodeToString([]byte(txid)), vout, utxo)
 		return NewFatal("[mainEvtRedeemOrReturn] UTXO's old type is not Redeeming or LostAndReturn "+s)
-	}
-	if utxo.RedeemTarget != receiver {
-		debug.PrintStack()
-		s := fmt.Sprintf("Txid=%s vout=%d\n%s\n", hex.EncodeToString([]byte(txid)), vout, utxo)
-		return NewFatal(fmt.Sprintf("[mainEvtRedeemOrReturn] UTXO's recorded target (%s) is not %s"+s,
-			hex.EncodeToString([]byte(utxo.RedeemTarget)), hex.EncodeToString([]byte(receiver))))
 	}
 	if writeBack {
 		if utxo.Type == Redeeming {
-			tx.Model(&utxo).Update("Type", RedeemingToDel)
+			tx.Model(&utxo).Updates(CcUtxo{Type: RedeemingToDel, RedeemTarget: receiver})
 		}
 		if utxo.Type == LostAndReturn {
-			tx.Model(&utxo).Update("Type", LostAndReturnToDel)
+			tx.Model(&utxo).Updates(CcUtxo{Type: LostAndReturnToDel, RedeemTarget: receiver})
 		}
 	}
 	return nil
 }
 
-func mainEvtFinishConverting(tx *gorm.DB, txid string, vout uint32, newCovenantAddr string, writeBack bool) error {
+func mainEvtFinishConverting(tx *gorm.DB, txid string, vout uint32, newCovenantAddr string,
+	newTxid string, newVout uint32, writeBack bool) error {
 	var utxo CcUtxo
 	result := tx.First(&utxo, "txid == ? AND vout == ?", txid, vout)
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
@@ -358,31 +395,37 @@ func mainEvtFinishConverting(tx *gorm.DB, txid string, vout uint32, newCovenantA
 	}
 	if utxo.Type != HandingOver {
 		debug.PrintStack()
-		s := fmt.Sprintf("Txid=%s vout=%d\n%s\n", hex.EncodeToString([]byte(txid)), vout, utxo)
+		s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", hex.EncodeToString([]byte(txid)), vout, utxo)
 		return NewFatal("[mainEvtFinishConverting] UTXO's old type is not HandingOver "+s)
 	}
 	if utxo.CovenantAddr != newCovenantAddr {
 		debug.PrintStack()
-		s := fmt.Sprintf("Txid=%s vout=%d\n%s\n", hex.EncodeToString([]byte(txid)), vout, utxo)
-		return NewFatal(fmt.Sprintf("[sideEvtRedeemable] UTXO's recorded covenantAddr (%s) is not %s"+s,
+		s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", hex.EncodeToString([]byte(txid)), vout, utxo)
+		return NewFatal(fmt.Sprintf("[mainEvtFinishConverting] UTXO's recorded covenantAddr (%s) is not %s"+s,
 			hex.EncodeToString([]byte(utxo.CovenantAddr)), hex.EncodeToString([]byte(newCovenantAddr))))
 	}
 	if writeBack {
-		tx.Model(&utxo).Update("Type", HandedOver)
+		tx.Model(&utxo).Updates(CcUtxo{Type: HandedOver, NewTxid: newTxid, NewVout: newVout})
 	}
 	return nil
 }
 
 func sideEvtChangeAddr(tx *gorm.DB, oldCovenantAddr, newCovenantAddr string) error {
 	var utxoList []CcUtxo
-	result := tx.Find(&utxoList, "CovenantAddr = ? AND Type = ?", oldCovenantAddr, Redeemable)
+	result := tx.Find(&utxoList, "Type = ?", Redeemable)
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		debug.PrintStack()
 		return NewFatal("[sideEvtChangeAddr] Cannot find redeemable UTXO with oldCovenantAddr: "+
 			hex.EncodeToString([]byte(oldCovenantAddr)))
 	}
 	for _, utxo := range utxoList {
-		tx.Model(&utxo).Updates(CcUtxo{Type: HandingOver, CovenantAddr: newCovenantAddr})
+		if utxo.CovenantAddr == oldCovenantAddr {
+			tx.Model(&utxo).Updates(CcUtxo{Type: HandingOver, CovenantAddr: newCovenantAddr})
+		} else {
+			debug.PrintStack()
+			return NewFatal("[sideEvtChangeAddr] Redeemable UTXO with wrong oldCovenantAddr: "+
+				hex.EncodeToString([]byte(utxo.CovenantAddr))+" "+utxo.CovenantAddr)
+		}
 	}
 	return updateCovenantAddr(tx, oldCovenantAddr, newCovenantAddr)
 }
@@ -397,14 +440,19 @@ func sideEvtConvert(tx *gorm.DB, txid string, vout uint32, newTxid string, newVo
 	}
 	if utxo.Type != HandedOver {
 		debug.PrintStack()
-		s := fmt.Sprintf("Txid=%s vout=%d\n%s\n", hex.EncodeToString([]byte(txid)), vout, utxo)
+		s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", hex.EncodeToString([]byte(txid)), vout, utxo)
 		return NewFatal("[sideEvtConvert] UTXO's old type is not HandedOver "+s)
 	}
 	if utxo.CovenantAddr != newCovenantAddr {
 		debug.PrintStack()
-		s := fmt.Sprintf("Txid=%s vout=%d\n%s\n", hex.EncodeToString([]byte(txid)), vout, utxo)
+		s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", hex.EncodeToString([]byte(txid)), vout, utxo)
 		return NewFatal(fmt.Sprintf("[sideEvtConvert] UTXO's recorded covenantAddr (%s) is not %s"+s,
 			hex.EncodeToString([]byte(utxo.CovenantAddr)), hex.EncodeToString([]byte(newCovenantAddr))))
+	}
+	if utxo.NewTxid != newTxid || utxo.NewVout != newVout {
+		debug.PrintStack()
+		s := fmt.Sprintf("newTxid=%s newVout=%d\n%#v\n", hex.EncodeToString([]byte(newTxid)), newVout, utxo)
+		return NewFatal("[sideEvtConvert] mismatch of newTxid/newVout: "+s)
 	}
 	tx.Model(&utxo).Updates(CcUtxo{Type: Redeemable, Txid: newTxid, Vout: newVout})
 	return nil
@@ -420,27 +468,27 @@ func sideEvtDeleted(tx *gorm.DB, covenantAddr string, txid string, vout uint32, 
 	}
 	if utxo.CovenantAddr != covenantAddr {
 		debug.PrintStack()
-		s := fmt.Sprintf("Txid=%s vout=%d\n%s\n", hex.EncodeToString([]byte(txid)), vout, utxo)
+		s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", hex.EncodeToString([]byte(txid)), vout, utxo)
 		return NewFatal(fmt.Sprintf("[sideEvtDeleted] UTXO's recorded covenantAddr (%s) is not %s"+s,
 			hex.EncodeToString([]byte(utxo.CovenantAddr)), hex.EncodeToString([]byte(covenantAddr))))
 	}
 	if sourceType == FromRedeeming {
 		if utxo.Type != RedeemingToDel {
 			debug.PrintStack()
-			s := fmt.Sprintf("Txid=%s vout=%d\n%s\n", hex.EncodeToString([]byte(txid)), vout, utxo)
+			s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", hex.EncodeToString([]byte(txid)), vout, utxo)
 			return NewFatal("[sideEvtDeleted] FromRedeeming-UTXO's old type is not RedeemingToDel "+s)
 		}
 		tx.Delete(&utxo)
 	} else if sourceType == FromLostAndFound {
 		if utxo.Type != LostAndReturnToDel {
 			debug.PrintStack()
-			s := fmt.Sprintf("Txid=%s vout=%d\n%s\n", hex.EncodeToString([]byte(txid)), vout, utxo)
+			s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", hex.EncodeToString([]byte(txid)), vout, utxo)
 			return NewFatal("[sideEvtDeleted] FromLostAndFound-UTXO's old type is not LostAndReturnToDel "+s)
 		}
 		tx.Delete(&utxo)
 	} else {
 		debug.PrintStack()
-		s := fmt.Sprintf("sourceType=%d Txid=%s vout=%d\n%s\n", sourceType, hex.EncodeToString([]byte(txid)), vout, utxo)
+		s := fmt.Sprintf("sourceType=%d Txid=%s vout=%d\n%#v\n", sourceType, hex.EncodeToString([]byte(txid)), vout, utxo)
 		return NewFatal("[sideEvtDeleted] Invalid sidechain event has invalid sourceType: "+s)
 	}
 	return nil

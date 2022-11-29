@@ -18,3 +18,5 @@
 *.un~
 *.go~
 cc-monitor
+monitor/test.db
+monitor/testdb.db

@@ -216,7 +216,10 @@ func (txc *CCTxCounter) checkEvilTx(gormTx *gorm.DB, blk *wire.MsgBlock) error {
 			}
 			if scrClass == txscript.ScriptHashTy {
 				addr := addrs[0].ScriptAddress()
-				err = mainEvtFinishConverting(gormTx, txid, 0, string(addr[:]), false)
+				txin := bchTx.TxIn[i]
+				oldTxid := string(txin.PreviousOutPoint.Hash[:])
+				oldVout := txin.PreviousOutPoint.Index
+				err = mainEvtFinishConverting(gormTx, oldTxid, oldVout, string(addr[:]), txid, 0, false)
 			} else if scrClass == txscript.PubKeyHashTy {
 				addr := addrs[0].ScriptAddress()
 				err = mainEvtRedeemOrReturn(gormTx, txid, 0, string(addr[:]), false)
@@ -260,6 +263,7 @@ func (bw *BlockWatcher) handleTx(gormTx *gorm.DB, bchTx *wire.MsgTx) error {
 	// convert: one-vin in utxoSet one-vout with p2sh (newCovenantAddr)
 	// redeem&return: one-vin in utxoSet one-vout with p2pkh
 	if len(bchTx.TxIn) == 1 && len(bchTx.TxOut) == 1 && inUtxoSet(bw.utxoSet, bchTx.TxIn[0]) {
+		txin := bchTx.TxIn[0]
 		scrClass, addrs, _, err := txscript.ExtractPkScriptAddrs(bchTx.TxOut[0].PkScript, NetParams)
 		if err != nil || len(addrs) != 1 {
 			debug.PrintStack()
@@ -267,7 +271,9 @@ func (bw *BlockWatcher) handleTx(gormTx *gorm.DB, bchTx *wire.MsgTx) error {
 		}
 		if scrClass == txscript.ScriptHashTy {
 			addr := addrs[0].ScriptAddress()
-			err = mainEvtFinishConverting(gormTx, txid, 0, string(addr[:]), true)
+			oldTxid := string(txin.PreviousOutPoint.Hash[:])
+			oldVout := txin.PreviousOutPoint.Index
+			err = mainEvtFinishConverting(gormTx, oldTxid, oldVout, string(addr[:]), txid, 0, true)
 		} else if scrClass == txscript.PubKeyHashTy {
 			addr := addrs[0].ScriptAddress()
 			err = mainEvtRedeemOrReturn(gormTx, txid, 0, string(addr[:]), true)
