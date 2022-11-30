@@ -8,7 +8,7 @@ require (
 	github.com/gcash/bchd v0.19.0
 	github.com/smartbch/cc-operator v0.0.0-20221121012319-1b9f3269eff6
 	github.com/smartbch/moeingevm v0.4.2-0.20220509120345-27a3d288346f
-	github.com/smartbch/smartbch v0.4.5-0.20221121011306-24c5ce951a76
+	github.com/smartbch/smartbch v0.4.5-0.20221124065050-319e182259f0
 	github.com/stretchr/testify v1.7.2
 	gorm.io/driver/sqlite v1.3.6
 	gorm.io/gorm v1.23.8
@@ -42,7 +42,7 @@ require (
 	github.com/sasha-s/go-deadlock v0.2.1-0.20190427202633-1595213edefa // indirect
 	github.com/shirou/gopsutil v3.21.4-0.20210419000835-c7a38de76ee5+incompatible // indirect
 	github.com/smartbch/moeingads v0.4.2 // indirect
-	github.com/smartbch/moeingdb v0.4.4-0.20220901031017-07b13bf12c62 // indirect
+	github.com/smartbch/moeingdb v0.4.4-0.20220927004455-2b80890c2704 // indirect
 	github.com/tendermint/tendermint v0.34.10 // indirect
 	github.com/tinylib/msgp v1.1.6 // indirect
 	github.com/tklauser/go-sysconf v0.3.5 // indirect

@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"os"
@@ -36,18 +37,22 @@ func TestSlidingWindow(t *testing.T) {
 	for i := 0; i < 24; i++ {
 		info.incrAmountInSlidingWindow(1, int64(3600*i))
 	}
-	sum := info.getSumInSlidingWindow(3600*24)
+	sum := info.getSumInSlidingWindow(3600*23)
 	require.Equal(t, int64(24), sum)
+	sum = info.getSumInSlidingWindow(3600*24)
+	require.Equal(t, int64(23), sum)
+	sum = info.getSumInSlidingWindow(3600*25)
+	require.Equal(t, int64(22), sum)
 	sum = info.getSumInSlidingWindow(3600*36)
-	require.Equal(t, int64(12), sum)
+	require.Equal(t, int64(11), sum)
 	info.incrAmountInSlidingWindow(5, int64(3600*25))
-	sum = info.getSumInSlidingWindow(3600*24)
-	require.Equal(t, int64(28), sum)
+	sum = info.getSumInSlidingWindow(3600*25)
+	require.Equal(t, int64(27), sum)
 	info.incrAmountInSlidingWindow(5, int64(3600*25)+10)
-	sum = info.getSumInSlidingWindow(3600*24)
+	sum = info.getSumInSlidingWindow(3600*25)
 	require.Equal(t, int64(32), sum)
 	sum = info.getSumInSlidingWindow(3600*36)
-	require.Equal(t, int64(20), sum)
+	require.Equal(t, int64(21), sum)
 }
 
 func TestDB0(t *testing.T) {
@@ -73,6 +78,8 @@ func TestDB0(t *testing.T) {
 	require.True(t, strings.Index(err.Error(), "This UTXO cannot be found") > 0)
 	err = mainEvtFinishConverting(db, "txid", 0, "newCovenantAddr", "newTxid", 1, false)
 	require.True(t, strings.Index(err.Error(), "This UTXO cannot be found") > 0)
+	err = sideEvtChangeAddr(db, "ccaddr2", "ccaddr3")
+	require.Nil(t, err)
 	err = sideEvtConvert(db, "txid", 0, "newTxid", 1, "newCovenantAddr")
 	require.True(t, strings.Index(err.Error(), "This UTXO cannot be found") > 0)
 	err = sideEvtDeleted(db, "covenantAddr", "txid", 0, FromRedeeming)
@@ -119,11 +126,16 @@ func TestDB1(t *testing.T) {
 	err = sideEvtRedeem(db, "ccaddr1", "txid1", 0, FromRedeemable, BurnAddressMainChain, &info, 3600)
 	require.True(t, strings.Index(err.Error(), "old type is not Redeemable") > 0)
 	err = sideEvtRedeem(db, "ccaddr1", "txid1", 0, FromLostAndFound, BurnAddressMainChain, &info, 3600)
-	require.True(t, strings.Index(err.Error(), "old type is not LostAndReturn") > 0)
+	fmt.Printf("DBG err %#v\n", err)
+	require.True(t, strings.Index(err.Error(), "old type is not LostAndFound") > 0)
 	err = mainEvtRedeemOrReturn(db, "txid1", 0, "target1", true)
 	require.True(t, strings.Index(err.Error(), "UTXO's old type is not Redeeming or LostAndReturn") > 0)
+	err = sideEvtRedeem(db, "ccaddr1", "txid1", 0, FromBurnRedeem, "target1", &info, 3600)
+	require.True(t, strings.Index(err.Error(), "redeem target is not BurningAddr") > 0)
 	err = sideEvtRedeem(db, "ccaddr1", "txid1", 0, FromBurnRedeem, BurnAddressMainChain, &info, 3600)
 	require.Nil(t, err)
+	err = sideEvtRedeemable(db, "ccaddr1", "txid1", 0)
+	require.True(t, strings.Index(err.Error(), "old type is not ToBeRecognized") > 0)
 	err = mainEvtRedeemOrReturn(db, "txid1", 0, "target1", true)
 	require.Nil(t, err)
 	err = sideEvtDeleted(db, "ccaddr1", "txid1", 0, FromRedeeming)
@@ -165,12 +177,24 @@ func TestDB2(t *testing.T) {
 	// Normal Flow:
 	err = addToBeRecognized(db, utxo)
 	require.Nil(t, err)
+	err = sideEvtRedeemable(db, "CCADDR1", "txid1", 0)
+	require.True(t, strings.Index(err.Error(), "UTXO's recorded covenantAddr") > 0)
+	err = mainEvtRedeemOrReturn(db, "txid1", 0, "target1", true)
+	require.True(t, strings.Index(err.Error(), "old type is not Redeeming or LostAndReturn") > 0)
 	err = sideEvtRedeemable(db, "ccaddr1", "txid1", 0)
 	require.Nil(t, err)
+	err = sideEvtRedeem(db, "ccaddr1", "txid1", 0, FromBurnRedeem, BurnAddressMainChain, &info, 3600)
+	require.True(t, strings.Index(err.Error(), "old type is not ToBeRecognized") > 0)
 	err = sideEvtRedeem(db, "ccaddr1", "txid1", 0, FromRedeemable, "target1", &info, 3600)
 	require.Nil(t, err)
 	err = mainEvtRedeemOrReturn(db, "txid1", 0, "target1", true)
 	require.Nil(t, err)
+	err = sideEvtDeleted(db, "wrong_ccaddr1", "txid1", 0, FromRedeeming)
+	require.True(t, strings.Index(err.Error(), "UTXO's recorded covenantAddr") > 0)
+	err = sideEvtDeleted(db, "ccaddr1", "txid1", 0, FromLostAndFound)
+	require.True(t, strings.Index(err.Error(), "old type is not LostAndReturnToDel") > 0)
+	err = sideEvtDeleted(db, "ccaddr1", "txid1", 0, FromBurnRedeem)
+	require.True(t, strings.Index(err.Error(), "Invalid sidechain event has invalid sourceType") > 0)
 	err = sideEvtDeleted(db, "ccaddr1", "txid1", 0, FromRedeeming)
 	require.Nil(t, err)
 }
@@ -206,12 +230,20 @@ func TestDB3(t *testing.T) {
 	// Normal Flow:
 	err = addToBeRecognized(db, utxo)
 	require.Nil(t, err)
+	err = sideEvtLostAndFound(db, "CCADDR1", "txid1", 0)
+	require.True(t, strings.Index(err.Error(), "UTXO's recorded covenantAddr") > 0)
 	err = sideEvtLostAndFound(db, "ccaddr1", "txid1", 0)
 	require.Nil(t, err)
 	err = sideEvtRedeem(db, "ccaddr1", "txid1", 0, FromLostAndFound, "target1", &info, 3600)
 	require.Nil(t, err)
 	err = mainEvtRedeemOrReturn(db, "txid1", 0, "target1", true)
 	require.Nil(t, err)
+	err = sideEvtLostAndFound(db, "ccaddr1", "txid1", 0)
+	require.True(t, strings.Index(err.Error(), "UTXO's old type is not ToBeRecognized") > 0)
+	err = sideEvtDeleted(db, "ccaddr1", "txid1", 0, FromRedeeming)
+	require.True(t, strings.Index(err.Error(), "old type is not RedeemingToDel") > 0)
+	err = sideEvtDeleted(db, "ccaddr1", "txid1", 0, FromBurnRedeem)
+	require.True(t, strings.Index(err.Error(), "Invalid sidechain event has invalid sourceType") > 0)
 	err = sideEvtDeleted(db, "ccaddr1", "txid1", 0, FromLostAndFound)
 	require.Nil(t, err)
 }
@@ -248,10 +280,24 @@ func TestDB4(t *testing.T) {
 	require.Nil(t, err)
 	err = sideEvtRedeemable(db, "ccaddr1", "txid1", 0)
 	require.Nil(t, err)
+	err = mainEvtFinishConverting(db, "txid1", 0, "ccaddr2", "txid2", 1, true)
+	require.True(t, strings.Index(err.Error(), "UTXO's old type is not HandingOver") > 0)
 	err = sideEvtChangeAddr(db, "ccaddr1", "ccaddr2")
 	require.Nil(t, err)
+	err = sideEvtChangeAddr(db, "wrong_ccaddr1", "ccaddr2") // wrong_ccaddr1 never exits, but we wouldn't report error
+	require.Nil(t, err)
+	err = sideEvtConvert(db, "txid1", 0, "txid2", 1, "ccaddr2")
+	require.True(t, strings.Index(err.Error(), "UTXO's old type is not HandedOver") > 0)
+	err = mainEvtFinishConverting(db, "txid1", 0, "wrong_ccaddr2", "txid2", 1, true)
+	require.True(t, strings.Index(err.Error(), "UTXO's recorded covenantAddr") > 0)
 	err = mainEvtFinishConverting(db, "txid1", 0, "ccaddr2", "txid2", 1, true)
 	require.Nil(t, err)
+	err = sideEvtConvert(db, "txid1", 0, "txid2", 1, "wrong_ccaddr2")//DBG
+	require.True(t, strings.Index(err.Error(), "UTXO's recorded covenantAddr") > 0)
+	err = sideEvtConvert(db, "txid1", 0, "wrong_txid2", 1, "ccaddr2")
+	require.True(t, strings.Index(err.Error(), "mismatch of newTxid/newVout") > 0)
+	err = sideEvtConvert(db, "txid1", 0, "txid2", 100, "ccaddr2")
+	require.True(t, strings.Index(err.Error(), "mismatch of newTxid/newVout") > 0)
 	err = sideEvtConvert(db, "txid1", 0, "txid2", 1, "ccaddr2")
 	require.Nil(t, err)
 
@@ -269,14 +315,41 @@ func TestDB4(t *testing.T) {
 	require.Nil(t, err)
 	err = sideEvtChangeAddr(db, "ccaddr2", "ccaddr3")
 	require.Nil(t, err)
-	err = mainEvtFinishConverting(db, "txid1", 0, "ccaddr3", "txid2", 2, true)
+	utxoSet := getUtxoSet(db, false)
+	require.Equal(t, 2, len(utxoSet))
+	utxoSet = getUtxoSet(db, true)
+	require.Equal(t, 2, len(utxoSet))
+	err = mainEvtFinishConverting(db, "txid2", 1, "ccaddr3", "txid3", 2, true)
 	require.Nil(t, err)
+	utxoSet = getUtxoSet(db, false)
+	require.Equal(t, 2, len(utxoSet))
+	utxoSet = getUtxoSet(db, true)
+	require.Equal(t, 1, len(utxoSet))
 	err = mainEvtFinishConverting(db, "TXID1", 1, "ccaddr3", "TXID2", 3, true)
 	require.Nil(t, err)
-	err = sideEvtConvert(db, "txid1", 0, "txid2", 2, "ccaddr3")
+	utxoSet = getUtxoSet(db, false)
+	require.Equal(t, 2, len(utxoSet))
+	utxoSet = getUtxoSet(db, true)
+	require.Equal(t, 0, len(utxoSet))
+	err = sideEvtConvert(db, "txid2", 1, "txid3", 2, "ccaddr3")
 	require.Nil(t, err)
 	err = sideEvtConvert(db, "TXID1", 1, "TXID2", 3, "ccaddr3")
 	require.Nil(t, err)
+
+	utxo3 := CcUtxo{
+		Type:         ToBeRecognized,
+		CovenantAddr: "ccaddr2",
+		RedeemTarget: "",
+		Amount:       100,
+		Txid:         "TXID3",
+		Vout:         3,
+	}
+	err = addToBeRecognized(db, utxo3)
+	require.Nil(t, err)
+	err = sideEvtRedeemable(db, "ccaddr2", "TXID3", 3)
+	require.Nil(t, err)
+	err = sideEvtChangeAddr(db, "ccaddr3", "ccaddr4") // cannot change addr before finishing convert
+	require.True(t, strings.Index(err.Error(), "Redeemable UTXO with wrong oldCovenantAddr") > 0)
 
 	os.RemoveAll("./testdb.db")
 }
@@ -293,9 +366,6 @@ func TestMetaInfo(t *testing.T) {
 	})
 	require.Panics(t, func() {
 		updateMainChainHeight(db, 201)
-	})
-	require.Panics(t, func() {
-		updateCovenantAddr(db, "ADDR0", "ADDR1")
 	})
 
 	// set the value
@@ -314,8 +384,9 @@ func TestMetaInfo(t *testing.T) {
 	require.True(t, info.Equals(info2))
 
 	// reopen the db and get the value
-	db = OpenDB("./test.db")
+	db = OpenDB("./testmeta.db")
 	info2 = getMetaInfo(db)
+	fmt.Printf("info  %#v\ninfo2 %#v\n", info, info2)
 	require.True(t, info.Equals(info2))
 
 	// update fields

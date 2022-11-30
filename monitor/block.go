@@ -34,7 +34,8 @@ const (
 )
 
 var (
-	NetParams             = &chaincfg.MainNetParams
+	NetParams         = &chaincfg.MainNetParams
+	CCContractAddress = [20]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x27, 0x14}
 )
 
 // A simple function. Just used during debug.
@@ -90,16 +91,25 @@ func SendStartRescanAndHandleUTXO(ctx context.Context, client *ethclient.Client,
 func TriggerDamageControl(fatalErr FatalError) {
 }
 
-func Catchup(bs *BlockScanner, client *ethclient.Client, endHeight int64) {
+// catch up the latest height of smartBCH
+func Catchup(bs *BlockScanner) {
 	ctx := context.Background()
 	metaInfo := getMetaInfo(bs.db)
-	for height := metaInfo.SideChainHeight; height < endHeight; height++ {
+	endHeight, err := bs.ethClient.BlockNumber(ctx)
+	if err != nil {
+		panic(err)
+	}
+	for height := metaInfo.SideChainHeight; height < int64(endHeight); height++ {
+		endHeight, err = bs.ethClient.BlockNumber(ctx)
+		if err != nil {
+			panic(err)
+		}
 		timestamp, err := bs.GetBlockTime(ctx, height)
 		if err != nil {
 			fmt.Printf("Error in GetBlockTime: %s\n", err.Error())
 			continue
 		}
-		err = bs.ScanBlock(ctx, timestamp, height, client)
+		err = bs.ScanBlock(ctx, timestamp, height)
 		if err != nil {
 			if fatalErr, ok := err.(FatalError); ok {
 				panic(fatalErr)
@@ -110,7 +120,7 @@ func Catchup(bs *BlockScanner, client *ethclient.Client, endHeight int64) {
 	}
 }
 
-func MainLoop(bs *BlockScanner, client *ethclient.Client, sbchClient *sbchrpcclient.Client) {
+func MainLoop(bs *BlockScanner, sbchClient *sbchrpcclient.Client) {
 	ctx := context.Background()
 	metaInfo := getMetaInfo(bs.db)
 	height := metaInfo.SideChainHeight
@@ -123,9 +133,9 @@ func MainLoop(bs *BlockScanner, client *ethclient.Client, sbchClient *sbchrpccli
 		}
 		metaInfo = getMetaInfo(bs.db) // MetaInfo may get updated during processing, so we reload it
 		if metaInfo.LastRescanTime > 0 && metaInfo.LastRescanTime + SendHandleUtxoDelay < time.Now().Unix() {
-			sendHandleUtxoTransaction(ctx, client, sbchClient) // TODO it will loop util succeed
+			sendHandleUtxoTransaction(ctx, bs.ethClient, sbchClient) // it will loop util succeed
 		}
-		bs.CheckSlidingWindow(ctx, timestamp, client, &metaInfo)
+		bs.CheckSlidingWindow(ctx, timestamp, &metaInfo)
 		// check mainchain's new blocks every 20 sidechain blocks
 		if height % 20 == 0 {
 			err, needRescan := bs.CheckMainChainForRescan(metaInfo)
@@ -137,10 +147,11 @@ func MainLoop(bs *BlockScanner, client *ethclient.Client, sbchClient *sbchrpccli
 				}
 			}
 			if needRescan {
-				sendStartRescanTransaction(ctx, client, sbchClient, height, metaInfo.ScannedHeight)
+				sendStartRescanTransaction(ctx, bs.ethClient, sbchClient, height, metaInfo.ScannedHeight)
 			}
 		}
-		err = bs.ScanBlock(ctx, timestamp, height, client)
+		// scan sidechain's blocks
+		err = bs.ScanBlock(ctx, timestamp, height)
 		if err != nil {
 			if fatalErr, ok := err.(FatalError); ok {
 				TriggerDamageControl(fatalErr)
@@ -170,10 +181,11 @@ type CCTxCounter struct {
 }
 
 // if the block at 'blockHeight' is finalized, analyze its transactions to increase 'ccTxCount'
-func (txc *CCTxCounter) CheckMainchainBlock(gormTx *gorm.DB, blockHeight int64) error {
+// if the block exists (no matter finalized or not), check evil transactions in it.
+func (txc *CCTxCounter) CheckMainChainBlock(gormTx *gorm.DB, blockHeight int64) error {
 	_, err := txc.client.GetBlockHash(blockHeight + 9) // is this block finalized?
 	isFinalized := err == nil
-	hash, err := txc.client.GetBlockHash(blockHeight)
+	hash, err := txc.client.GetBlockHash(blockHeight) // even if it is not finalized, we still need checkEvilTx
 	if err != nil {
 		return ErrNoBlockFoundAtGivenHeight
 	}
@@ -200,8 +212,8 @@ func (txc *CCTxCounter) checkEvilTx(gormTx *gorm.DB, blk *wire.MsgBlock) error {
 	for _, bchTx := range blk.Transactions {
 		h := bchTx.TxHash()
 		txid := string(h[:])
-		for i := range bchTx.TxIn {
-			if !inUtxoSet(txc.utxoSet, bchTx.TxIn[i]) {
+		for _, txin := range bchTx.TxIn {
+			if !inUtxoSet(txc.utxoSet, txin) {
 				continue
 			}
 			isValidFormat := len(bchTx.TxIn) == 1 && len(bchTx.TxOut) == 1
@@ -214,13 +226,12 @@ func (txc *CCTxCounter) checkEvilTx(gormTx *gorm.DB, blk *wire.MsgBlock) error {
 				debug.PrintStack()
 				return NewFatal(fmt.Sprintf("[EVIL] cannot parse output %#v\n", bchTx))
 			}
-			if scrClass == txscript.ScriptHashTy {
+			if scrClass == txscript.ScriptHashTy { // P2SH
 				addr := addrs[0].ScriptAddress()
-				txin := bchTx.TxIn[i]
 				oldTxid := string(txin.PreviousOutPoint.Hash[:])
 				oldVout := txin.PreviousOutPoint.Index
 				err = mainEvtFinishConverting(gormTx, oldTxid, oldVout, string(addr[:]), txid, 0, false)
-			} else if scrClass == txscript.PubKeyHashTy {
+			} else if scrClass == txscript.PubKeyHashTy { // P2PKH
 				addr := addrs[0].ScriptAddress()
 				err = mainEvtRedeemOrReturn(gormTx, txid, 0, string(addr[:]), false)
 			} else {
@@ -242,7 +253,7 @@ func (txc *CCTxCounter) isCCTxToSmartBCH(bchTx *wire.MsgTx) bool {
 			continue
 		}
 		addr := addrs[0].ScriptAddress()
-		if scrClass == txscript.ScriptHashTy && string(addr[:]) == txc.currCovenantAddr {
+		if scrClass == txscript.ScriptHashTy && string(addr[:]) == txc.currCovenantAddr { //P2SH
 			return true
 		}
 	}
@@ -257,7 +268,7 @@ type BlockWatcher struct {
 	currCovenantAddr string
 }
 
-func (bw *BlockWatcher) handleTx(gormTx *gorm.DB, bchTx *wire.MsgTx) error {
+func (bw *BlockWatcher) handleMainChainTx(gormTx *gorm.DB, bchTx *wire.MsgTx) error {
 	h := bchTx.TxHash()
 	txid := string(h[:])
 	// convert: one-vin in utxoSet one-vout with p2sh (newCovenantAddr)
@@ -269,12 +280,12 @@ func (bw *BlockWatcher) handleTx(gormTx *gorm.DB, bchTx *wire.MsgTx) error {
 			debug.PrintStack()
 			return NewFatal(fmt.Sprintf("[EVIL] cannot parse output %#v\n", bchTx))
 		}
-		if scrClass == txscript.ScriptHashTy {
+		if scrClass == txscript.ScriptHashTy { // P2SH
 			addr := addrs[0].ScriptAddress()
 			oldTxid := string(txin.PreviousOutPoint.Hash[:])
 			oldVout := txin.PreviousOutPoint.Index
 			err = mainEvtFinishConverting(gormTx, oldTxid, oldVout, string(addr[:]), txid, 0, true)
-		} else if scrClass == txscript.PubKeyHashTy {
+		} else if scrClass == txscript.PubKeyHashTy { //P2PKH
 			addr := addrs[0].ScriptAddress()
 			err = mainEvtRedeemOrReturn(gormTx, txid, 0, string(addr[:]), true)
 		} else {
@@ -290,36 +301,35 @@ func (bw *BlockWatcher) handleTx(gormTx *gorm.DB, bchTx *wire.MsgTx) error {
 			continue
 		}
 		addr := addrs[0].ScriptAddress()
-		if scrClass != txscript.ScriptHashTy || string(addr[:]) != bw.currCovenantAddr {
-			continue
-		}
-		ccUtxo := CcUtxo{
-			Type:         ToBeRecognized,
-			CovenantAddr: bw.currCovenantAddr,
-			Amount:       txout.Value,
-			Txid:         txid,
-			Vout:         uint32(vout),
-		}
-		err = addToBeRecognized(gormTx, ccUtxo)
-		if err != nil {
-			return err
+		isAddToBeRecognized := scrClass == txscript.ScriptHashTy && string(addr[:]) == bw.currCovenantAddr
+		if isAddToBeRecognized {
+			ccUtxo := CcUtxo{
+				Type:         ToBeRecognized,
+				CovenantAddr: bw.currCovenantAddr,
+				Amount:       txout.Value,
+				Txid:         txid,
+				Vout:         uint32(vout),
+			}
+			if err = addToBeRecognized(gormTx, ccUtxo); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
-func (bw *BlockWatcher) HandleMainchainBlock(blockHeight int64) error {
+func (bw *BlockWatcher) HandleMainChainBlock(blockHeight int64) error {
 	hash, err := bw.client.GetBlockHash(blockHeight)
-	if err != nil {
+	if err != nil { // block not ready
 		return ErrNoBlockFoundAtGivenHeight
 	}
 	blk, err := bw.client.GetBlock(hash)
 	if err != nil {
-		panic(err)
+		panic(err) //impossible
 	}
-	err = bw.db.Transaction(func(gormTx *gorm.DB) error {
+	err = bw.db.Transaction(func(gormTx *gorm.DB) error { // One DB-Transaction to update UTXO set and height
 		for _, bchTx := range blk.Transactions {
-			err = bw.handleTx(gormTx, bchTx)
+			err = bw.handleMainChainTx(gormTx, bchTx)
 			if err != nil {
 				return err
 			}
@@ -333,25 +343,45 @@ func (bw *BlockWatcher) HandleMainchainBlock(blockHeight int64) error {
 
 // Scan blocks of side chain and main chain
 type BlockScanner struct {
-	bchClient      *rpcclient.Client
-	db             *gorm.DB
-	rpcClient      *rpc.Client
-	ccContractAddr common.Address
-	abi            *abi.ABI
+	bchClient *rpcclient.Client
+	db        *gorm.DB
+	rpcClient *rpc.Client
+	ethClient *ethclient.Client
+	abi       abi.ABI
 }
 
-func (bs *BlockScanner) CheckSlidingWindow(ctx context.Context, timestamp int64, client *ethclient.Client, metaInfo *MetaInfo) {
+func NewBlockScanner(bchClient *rpcclient.Client, db *gorm.DB, sideChainUrl string) *BlockScanner {
+	rpcClient, err := rpc.Dial(sideChainUrl)
+	if err != nil {
+		panic(err)
+	}
+	ethClient, err := ethclient.Dial(sideChainUrl)
+	if err != nil {
+		panic(err)
+	}
+	return &BlockScanner{
+		bchClient:      bchClient,
+		db:             db,
+		rpcClient:      rpcClient,
+		ethClient:      ethClient,
+		abi:            ccabi.ABI.GetABI(),
+	}
+
+}
+
+// according to the sum in sliding window, pause/resume the shagate logic
+func (bs *BlockScanner) CheckSlidingWindow(ctx context.Context, timestamp int64, metaInfo *MetaInfo) {
 	sum := metaInfo.getSumInSlidingWindow(timestamp)
 	changeIsPaused := false
 	if sum > ThresholdIn24Hours && !metaInfo.IsPaused {
 		changeIsPaused = true
 		metaInfo.IsPaused = true
-		sendPauseTransaction(ctx, client)
+		sendPauseTransaction(ctx, bs.ethClient)
 	}
 	if sum < ThresholdIn24Hours && metaInfo.IsPaused {
 		changeIsPaused = true
 		metaInfo.IsPaused = false
-		sendResumeTransaction(ctx, client)
+		sendResumeTransaction(ctx, bs.ethClient)
 	}
 	if changeIsPaused {
 		bs.db.Model(&metaInfo).Updates(metaInfo)
@@ -363,19 +393,20 @@ func (bs *BlockScanner) CheckMainChainForRescan(metaInfo MetaInfo) (error, bool)
 	txCounter := &CCTxCounter{
 		currCovenantAddr: metaInfo.CurrCovenantAddr,
 		client:           bs.bchClient,
-		utxoSet:          getUtxoSet(bs.db, true),
+		utxoSet:          getUtxoSet(bs.db, false), // get all the UTXOs for checkEvilTx
 	}
 	for {
-		err := txCounter.CheckMainchainBlock(bs.db, height)
-		if errors.Is(err, ErrNoBlockFoundAtGivenHeight) {
+		err := txCounter.CheckMainChainBlock(bs.db, height)
+		if errors.Is(err, ErrNoBlockFoundAtGivenHeight) { // no new blocks
 			break
 		}
 		if err != nil {
 			return err, false
 		}
-		height++
+		height++ //try to find the next new block
 	}
-	return nil, txCounter.ccTxCount > 0 || metaInfo.ScannedHeight + RescanThreshold < height
+	needRescan := txCounter.ccTxCount > 0 || metaInfo.ScannedHeight + RescanThreshold < height
+	return nil, needRescan
 }
 
 func (bs *BlockScanner) GetBlockTime(ctx context.Context, blockHeight int64) (int64, error) {
@@ -391,7 +422,7 @@ func (bs *BlockScanner) GetBlockTime(ctx context.Context, blockHeight int64) (in
 	return int64(head.Time), nil
 }
 
-func (bs *BlockScanner) ScanBlock(ctx context.Context, timestamp, blockHeight int64, client *ethclient.Client) error {
+func (bs *BlockScanner) ScanBlock(ctx context.Context, timestamp, blockHeight int64) error {
 	var txList []*mevmtypes.Transaction
 	err := bs.rpcClient.CallContext(ctx, &txList, "sbch_getTxListByHeight", hexutil.EncodeUint64(uint64(blockHeight)))
 	if err != nil {
@@ -399,7 +430,7 @@ func (bs *BlockScanner) ScanBlock(ctx context.Context, timestamp, blockHeight in
 	}
 	txToBeParsed := make([]*mevmtypes.Transaction, 0, len(txList))
 	for _, tx := range txList {
-		if tx.To != bs.ccContractAddr {
+		if tx.To != CCContractAddress {
 			continue
 		}
 		if len(tx.Input) < 4 || tx.Status != mevmtypes.ReceiptStatusSuccessful {
@@ -410,7 +441,7 @@ func (bs *BlockScanner) ScanBlock(ctx context.Context, timestamp, blockHeight in
 			continue
 		}
 		if method.Name == "handleUTXOs" {
-			updateLastRescanTime(bs.db, -1)
+			updateLastRescanTime(bs.db, -1) // -1 means no pending startRescan needs to run handleUTXOs
 		} else if method.Name == "startRescan" && len(tx.Input) == 36 {
 			bs.parseStartRescan(ctx, timestamp, tx)
 			txToBeParsed = append(txToBeParsed, tx)
@@ -431,18 +462,28 @@ func (bs *BlockScanner) ScanBlock(ctx context.Context, timestamp, blockHeight in
 }
 
 func (bs *BlockScanner) parseStartRescan(ctx context.Context, timestamp int64, tx *mevmtypes.Transaction) {
-	mainChainHeight := int64(binary.BigEndian.Uint64(tx.Input[4+32-8:]))
+	start := 4+32-8
+	if len(tx.Input) < start {
+		return
+	}
+	mainChainHeight := int64(binary.BigEndian.Uint64(tx.Input[start:]))
 	metaInfo := getMetaInfo(bs.db)
 	watcher := &BlockWatcher{
 		db:               bs.db,
 		client:           bs.bchClient,
-		utxoSet:          getUtxoSet(bs.db, false),
+		utxoSet:          getUtxoSet(bs.db, true), // only the UTXOs waiting to be moved on mainchain
 		currCovenantAddr: metaInfo.CurrCovenantAddr,
 	}
 	for h := metaInfo.MainChainHeight + 1; h <= mainChainHeight; h++ {
-		watcher.HandleMainchainBlock(h)
+		watcher.HandleMainChainBlock(h)
 	}
 	bs.db.Model(&metaInfo).Updates(MetaInfo{ScannedHeight: mainChainHeight, LastRescanTime: int64(timestamp)})
+}
+
+type ConvertParams struct {
+	Txid         common.Hash
+	Vout         uint32
+	CovenantAddr common.Address
 }
 
 func (bs *BlockScanner) processReceipt(gormTx *gorm.DB, tx *mevmtypes.Transaction,
@@ -452,7 +493,7 @@ func (bs *BlockScanner) processReceipt(gormTx *gorm.DB, tx *mevmtypes.Transactio
 		//NewRedeemable(uint256 indexed txid, uint32 indexed vout, address indexed covenantAddr);
 		case EventNewRedeemable:
 			txid := string(log.Topics[1][:])
-			vout := uint32(binary.BigEndian.Uint32(log.Topics[2][28:]))
+			vout := binary.BigEndian.Uint32(log.Topics[2][28:])
 			addr := log.Topics[3][12:]
 			err := sideEvtRedeemable(gormTx, string(addr[:]), txid, vout)
 			if err != nil {
@@ -461,7 +502,7 @@ func (bs *BlockScanner) processReceipt(gormTx *gorm.DB, tx *mevmtypes.Transactio
 		//NewLostAndFound(uint256 indexed txid, uint32 indexed vout, address indexed covenantAddr);
 		case EventNewLostAndFound:
 			txid := string(log.Topics[1][:])
-			vout := uint32(binary.BigEndian.Uint32(log.Topics[2][28:]))
+			vout := binary.BigEndian.Uint32(log.Topics[2][28:])
 			addr := log.Topics[3][12:]
 			err := sideEvtLostAndFound(gormTx, string(addr[:]), txid, vout)
 			if err != nil {
@@ -470,8 +511,9 @@ func (bs *BlockScanner) processReceipt(gormTx *gorm.DB, tx *mevmtypes.Transactio
 		//Redeem(uint256 indexed txid, uint32 indexed vout, address indexed covenantAddr, uint8 sourceType);
 		case EventRedeem:
 			txid := string(log.Topics[1][:])
-			vout := uint32(binary.BigEndian.Uint32(log.Topics[2][28:]))
+			vout := binary.BigEndian.Uint32(log.Topics[2][28:])
 			addr := log.Topics[3][12:]
+			//function redeem(uint256 txid, uint256 index, address targetAddress) external payable;
 			redeemTarget := string(tx.Input[32+32+12:])
 			err := sideEvtRedeem(gormTx, string(addr[:]), txid, vout, log.Data[31], redeemTarget,
 				metaInfo, currTime)
@@ -489,7 +531,7 @@ func (bs *BlockScanner) processReceipt(gormTx *gorm.DB, tx *mevmtypes.Transactio
 		//Convert(uint256 indexed prevTxid, uint32 indexed prevVout, address indexed oldCovenantAddr, uint256 txid, uint32 vout, address newCovenantAddr);
 		case EventConvert:
 			prevTxid := string(log.Topics[1][:])
-			prevVout := uint32(binary.BigEndian.Uint32(log.Topics[2][28:]))
+			prevVout := binary.BigEndian.Uint32(log.Topics[2][28:])
 			var params ConvertParams
 			err := bs.abi.UnpackIntoInterface(&params, "Convert", log.Data)
 			if err != nil {
@@ -503,7 +545,7 @@ func (bs *BlockScanner) processReceipt(gormTx *gorm.DB, tx *mevmtypes.Transactio
 		//Deleted(uint256 indexed txid, uint32 indexed vout, address indexed covenantAddr, uint8 sourceType);
 		case EventDeleted:
 			txid := string(log.Topics[1][:])
-			vout := uint32(binary.BigEndian.Uint32(log.Topics[2][28:]))
+			vout := binary.BigEndian.Uint32(log.Topics[2][28:])
 			addr := log.Topics[3][12:]
 			err := sideEvtDeleted(gormTx, string(addr[:]), txid, vout, log.Data[31])
 			if err != nil {

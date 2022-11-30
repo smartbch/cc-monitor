@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"runtime/debug"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -105,6 +104,7 @@ type MetaInfo struct {
 }
 
 func (m *MetaInfo) incrAmountInSlidingWindow(amount, currTime int64) {
+	fmt.Printf("before incrAmountInSlidingWindow: amount %s\ntimestamp %s\n", m.AmountX24, m.TimestampX24)
 	hour := currTime/3600
 	slot := hour%24;
 	var timestampX24 []int64
@@ -130,6 +130,7 @@ func (m *MetaInfo) incrAmountInSlidingWindow(amount, currTime int64) {
 	} else {
 		m.AmountX24 = string(bz);
 	}
+	fmt.Printf("after incrAmountInSlidingWindow: amount %s\ntimestamp %s\n", m.AmountX24, m.TimestampX24)
 }
 
 func (m *MetaInfo) getSumInSlidingWindow(currTime int64) (sum int64) {
@@ -141,19 +142,14 @@ func (m *MetaInfo) getSumInSlidingWindow(currTime int64) (sum int64) {
 	if err := json.Unmarshal([]byte(m.AmountX24), &amountX24); err != nil {
 		panic(err)
 	}
+	fmt.Printf("getSumInSlidingWindow %d: amount %s\ntimestamp %s\n", currTime, m.AmountX24, m.TimestampX24)
 	hour := currTime/3600
 	for i, a := range amountX24 {
-		if hour - 24 <= timestampX24[i] {
+		if hour - 24 < timestampX24[i] {
 			sum += a
 		}
 	}
 	return
-}
-
-type ConvertParams struct {
-	Txid         common.Hash
-	Vout         uint32
-	CovenantAddr common.Address
 }
 
 func MigrateSchema(db *gorm.DB) {
@@ -184,7 +180,7 @@ func getMetaInfo(tx *gorm.DB) (info MetaInfo) {
 	return info
 }
 
-func initMetaInfo(tx *gorm.DB, info *MetaInfo) {
+func InitMetaInfo(tx *gorm.DB, info *MetaInfo) {
 	info.TimestampX24 = ZeroX24Json
 	info.AmountX24 = ZeroX24Json
 	result := tx.Create(&info)
@@ -413,10 +409,9 @@ func mainEvtFinishConverting(tx *gorm.DB, txid string, vout uint32, newCovenantA
 func sideEvtChangeAddr(tx *gorm.DB, oldCovenantAddr, newCovenantAddr string) error {
 	var utxoList []CcUtxo
 	result := tx.Find(&utxoList, "Type = ?", Redeemable)
-	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-		debug.PrintStack()
-		return NewFatal("[sideEvtChangeAddr] Cannot find redeemable UTXO with oldCovenantAddr: "+
-			hex.EncodeToString([]byte(oldCovenantAddr)))
+	fmt.Printf("sideEvtChangeAddr result %#v\n%#v\n", result, utxoList)
+	if len(utxoList) == 0 {
+		return nil
 	}
 	for _, utxo := range utxoList {
 		if utxo.CovenantAddr == oldCovenantAddr {
