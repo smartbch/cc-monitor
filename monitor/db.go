@@ -1,7 +1,6 @@
 package monitor
 
 import (
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -187,6 +186,8 @@ func InitMetaInfo(tx *gorm.DB, info *MetaInfo) {
 	if result.Error != nil {
 		panic(result.Error)
 	}
+	out := getMetaInfo(tx)
+	fmt.Printf("InitMetaInfo:: %#v\n", out)
 }
 
 func updateLastRescanTime(tx *gorm.DB, lastRescanTime int64) error {
@@ -219,8 +220,16 @@ func updateCovenantAddr(tx *gorm.DB, lastAddr, currAddr string) error {
 	return nil
 }
 
-func getUtxoSet(tx *gorm.DB, waitingMainChain bool) (map[[36]byte]struct{}) {
-	result := make(map[[36]byte]struct{})
+func printUtxoSet(tx *gorm.DB) {
+	var utxoList []CcUtxo
+	tx.Find(&utxoList)
+	for i, utxo := range utxoList {
+		fmt.Printf("UTXO#%d %#v\n", i, utxo)
+	}
+}
+
+func getUtxoSet(tx *gorm.DB, waitingMainChain bool) (map[string]struct{}) {
+	result := make(map[string]struct{})
 	var utxoList []CcUtxo
 	if waitingMainChain { // only the UTXOs what are waiting to be moved on the main chain
 		// utxo.Type == LostAndReturn || utxo.Type == Redeeming || utxo.Type == HandingOver
@@ -229,10 +238,8 @@ func getUtxoSet(tx *gorm.DB, waitingMainChain bool) (map[[36]byte]struct{}) {
 		tx.Find(&utxoList)
 	}
 	for _, utxo := range utxoList {
-		var id [36]byte
-		copy(id[:32], utxo.Txid)
-		binary.BigEndian.PutUint32(id[32:], uint32(utxo.Vout))
-		result[id] = struct{}{}
+		key := fmt.Sprintf("%s-%d", utxo.Txid, utxo.Vout)
+		result[key] = struct{}{}
 	}
 	return result
 }
@@ -276,6 +283,8 @@ func sideEvtRedeemable(tx *gorm.DB, covenantAddr string, txid string, vout uint3
 			hex.EncodeToString([]byte(utxo.CovenantAddr)), hex.EncodeToString([]byte(covenantAddr))))
 	}
 	tx.Model(&utxo).Update("Type", Redeemable)
+	tx.First(&utxo, "txid == ? AND vout == ?", txid, vout)
+	fmt.Printf("DBG in sideEvtRedeemable %#v\n", utxo)
 	return nil
 }
 

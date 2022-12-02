@@ -4,11 +4,13 @@ import (
 	"context"
 	"runtime/debug"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"gorm.io/gorm"
 	"math/big"
+	"strconv"
 	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -21,6 +23,7 @@ import (
 	"github.com/gcash/bchd/rpcclient"
 	"github.com/gcash/bchd/txscript"
 	"github.com/gcash/bchd/wire"
+	"github.com/gcash/bchutil"
 	mevmtypes "github.com/smartbch/moeingevm/types"
 	ccabi "github.com/smartbch/smartbch/crosschain/abi"
 	sbchrpcclient "github.com/smartbch/smartbch/rpc/client"
@@ -34,9 +37,55 @@ const (
 )
 
 var (
-	NetParams         = &chaincfg.MainNetParams
+	NetParams         = &chaincfg.TestNet3Params //&chaincfg.MainNetParams
 	CCContractAddress = [20]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x27, 0x14}
 )
+
+func ScriptHashToAddr(h []byte) string {
+	addr, err := bchutil.NewAddressScriptHashFromHash(h, NetParams)
+	if err != nil {
+		panic(err)
+	}
+	return addr.EncodeAddress()
+}
+
+type Block struct {
+	Transactions []*Transaction `json:"transactions"`
+}
+
+type Transaction struct {
+	Hash              string  `json:"hash"`
+	TransactionIndex  string  `json:"transactionIndex"`
+	Nonce             string  `json:"nonce"`
+	BlockHash         string  `json:"blockHash"`
+	BlockNumber       string  `json:"blockNumber"`
+	From              string  `json:"from"`
+	To                string  `json:"to"`
+	Value             string  `json:"value"`
+	GasPrice          string  `json:"gasPrice"`
+	Gas               string  `json:"gas"`
+	Input             string  `json:"input"`
+	CumulativeGasUsed string  `json:"cumulativeGasUsed"`
+	GasUsed           string  `json:"gasUsed"`
+	ContractAddress   string  `json:"contractAddress"`
+	Logs              []Log   `json:"logs"`
+	LogsBloom         string  `json:"logsBloom"`
+	Status            string  `json:"status"`
+	StatusStr         string  `json:"statusStr"`
+	OutData           string  `json:"outData"`
+}
+
+type Log struct {
+	Address     string   `json:"address"`
+	Topics      []string `json:"topics"`
+	Data        string   `json:"data"`
+	BlockNumber string   `json:"blockNumber"`
+	TxHash      string   `json:"txHash"`
+	TxIndex     string   `json:"txIndex"`
+	BlockHash   string   `json:"blockHash"`
+	Index       string   `json:"index"`
+	Removed     bool     `json:"removed"`
+}
 
 // A simple function. Just used during debug.
 func SendStartRescanAndHandleUTXO(ctx context.Context, client *ethclient.Client, bchClient *rpcclient.Client, lastRescanHeight, lastRescanTime, handleUtxoDelay int64) {
@@ -95,11 +144,14 @@ func TriggerDamageControl(fatalErr FatalError) {
 func Catchup(bs *BlockScanner) {
 	ctx := context.Background()
 	metaInfo := getMetaInfo(bs.db)
+	fmt.Printf("MetaInfo %#v\n", metaInfo)
 	endHeight, err := bs.ethClient.BlockNumber(ctx)
 	if err != nil {
 		panic(err)
 	}
+	fmt.Printf("SideChainHeight %d\n", metaInfo.SideChainHeight)
 	for height := metaInfo.SideChainHeight; height < int64(endHeight); height++ {
+		fmt.Printf("Height %d\n", height)
 		endHeight, err = bs.ethClient.BlockNumber(ctx)
 		if err != nil {
 			panic(err)
@@ -109,6 +161,7 @@ func Catchup(bs *BlockScanner) {
 			fmt.Printf("Error in GetBlockTime: %s\n", err.Error())
 			continue
 		}
+		fmt.Printf("Timestamp %d\n", timestamp)
 		err = bs.ScanBlock(ctx, timestamp, height)
 		if err != nil {
 			if fatalErr, ok := err.(FatalError); ok {
@@ -164,10 +217,17 @@ func MainLoop(bs *BlockScanner, sbchClient *sbchrpcclient.Client) {
 	}
 }
 
-func inUtxoSet(utxoSet map[[36]byte]struct{}, txin *wire.TxIn) bool {
-	var key [36]byte
-	copy(key[:32], txin.PreviousOutPoint.Hash[:])
-	binary.BigEndian.PutUint32(key[32:], txin.PreviousOutPoint.Index)
+func reverse(in []byte) []byte {
+	out := make([]byte, len(in))
+	for i, c := range in {
+		out[len(out)-1-i] = c
+	}
+	return out
+}
+
+func inUtxoSet(utxoSet map[string]struct{}, txin *wire.TxIn) bool {
+	key := fmt.Sprintf("%s-%d", hex.EncodeToString(reverse(txin.PreviousOutPoint.Hash[:])),
+		txin.PreviousOutPoint.Index)
 	_, ok := utxoSet[key]
 	return ok
 }
@@ -177,7 +237,7 @@ type CCTxCounter struct {
 	currCovenantAddr string
 	client           *rpcclient.Client
 	ccTxCount        int64
-	utxoSet          map[[36]byte]struct{}
+	utxoSet          map[string]struct{}
 }
 
 // if the block at 'blockHeight' is finalized, analyze its transactions to increase 'ccTxCount'
@@ -211,7 +271,7 @@ func (txc *CCTxCounter) CheckMainChainBlock(gormTx *gorm.DB, blockHeight int64) 
 func (txc *CCTxCounter) checkEvilTx(gormTx *gorm.DB, blk *wire.MsgBlock) error {
 	for _, bchTx := range blk.Transactions {
 		h := bchTx.TxHash()
-		txid := string(h[:])
+		txid := hex.EncodeToString(reverse(h[:]))
 		for _, txin := range bchTx.TxIn {
 			if !inUtxoSet(txc.utxoSet, txin) {
 				continue
@@ -228,7 +288,7 @@ func (txc *CCTxCounter) checkEvilTx(gormTx *gorm.DB, blk *wire.MsgBlock) error {
 			}
 			if scrClass == txscript.ScriptHashTy { // P2SH
 				addr := addrs[0].ScriptAddress()
-				oldTxid := string(txin.PreviousOutPoint.Hash[:])
+				oldTxid := hex.EncodeToString(reverse(txin.PreviousOutPoint.Hash[:]))
 				oldVout := txin.PreviousOutPoint.Index
 				err = mainEvtFinishConverting(gormTx, oldTxid, oldVout, string(addr[:]), txid, 0, false)
 			} else if scrClass == txscript.PubKeyHashTy { // P2PKH
@@ -264,37 +324,43 @@ func (txc *CCTxCounter) isCCTxToSmartBCH(bchTx *wire.MsgTx) bool {
 type BlockWatcher struct {
 	db               *gorm.DB
 	client           *rpcclient.Client
-	utxoSet          map[[36]byte]struct{}
+	utxoSet          map[string]struct{}
 	currCovenantAddr string
 }
 
-func (bw *BlockWatcher) handleMainChainTx(gormTx *gorm.DB, bchTx *wire.MsgTx) error {
+func (bw *BlockWatcher) handleMainChainTx(gormTx *gorm.DB, bchTx *wire.MsgTx) (bool, error) {
 	h := bchTx.TxHash()
-	txid := string(h[:])
+	txid := hex.EncodeToString(reverse(h[:]))
+	dbChanged := false
 	// convert: one-vin in utxoSet one-vout with p2sh (newCovenantAddr)
 	// redeem&return: one-vin in utxoSet one-vout with p2pkh
 	if len(bchTx.TxIn) == 1 && len(bchTx.TxOut) == 1 && inUtxoSet(bw.utxoSet, bchTx.TxIn[0]) {
+		dbChanged = true
 		txin := bchTx.TxIn[0]
 		scrClass, addrs, _, err := txscript.ExtractPkScriptAddrs(bchTx.TxOut[0].PkScript, NetParams)
 		if err != nil || len(addrs) != 1 {
 			debug.PrintStack()
-			return NewFatal(fmt.Sprintf("[EVIL] cannot parse output %#v\n", bchTx))
+			return false, NewFatal(fmt.Sprintf("[EVIL] cannot parse output %#v\n", bchTx))
 		}
+		oldTxid := hex.EncodeToString(reverse(txin.PreviousOutPoint.Hash[:]))
+		oldVout := txin.PreviousOutPoint.Index
+		fmt.Printf("TXIN %s-%d\n", oldTxid, oldVout)
 		if scrClass == txscript.ScriptHashTy { // P2SH
 			addr := addrs[0].ScriptAddress()
-			oldTxid := string(txin.PreviousOutPoint.Hash[:])
-			oldVout := txin.PreviousOutPoint.Index
 			err = mainEvtFinishConverting(gormTx, oldTxid, oldVout, string(addr[:]), txid, 0, true)
 		} else if scrClass == txscript.PubKeyHashTy { //P2PKH
 			addr := addrs[0].ScriptAddress()
-			err = mainEvtRedeemOrReturn(gormTx, txid, 0, string(addr[:]), true)
+			err = mainEvtRedeemOrReturn(gormTx, oldTxid, oldVout, string(addr[:]), true)
 		} else {
 			debug.PrintStack()
-			return NewFatal(fmt.Sprintf("[EVIL] invalid srcClass %#v\n", bchTx))
+			return false, NewFatal(fmt.Sprintf("[EVIL] invalid srcClass %#v\n", bchTx))
 		}
-		return err
+		if err != nil {
+			return false, err
+		}
 	}
 	// addToBeRecognized: one-vout with p2sh, maybe one-vout with opreturn
+	covenantAddr := ScriptHashToAddr([]byte(bw.currCovenantAddr))
 	for vout, txout := range bchTx.TxOut {
 		scrClass, addrs, _, err := txscript.ExtractPkScriptAddrs(txout.PkScript, NetParams)
 		if err != nil ||  len(addrs) != 1 {
@@ -302,7 +368,13 @@ func (bw *BlockWatcher) handleMainChainTx(gormTx *gorm.DB, bchTx *wire.MsgTx) er
 		}
 		addr := addrs[0].ScriptAddress()
 		isAddToBeRecognized := scrClass == txscript.ScriptHashTy && string(addr[:]) == bw.currCovenantAddr
+		if scrClass == txscript.ScriptHashTy {
+			fmt.Printf("ADDRS: %s vs %s isAddToBeRecognized %v\n", covenantAddr, addrs[0].EncodeAddress(), isAddToBeRecognized)
+			fmt.Printf("%#v vs %#v\n", addr[:], []byte(bw.currCovenantAddr))
+			fmt.Printf("txid: %s\n", txid)
+		}
 		if isAddToBeRecognized {
+			dbChanged = true
 			ccUtxo := CcUtxo{
 				Type:         ToBeRecognized,
 				CovenantAddr: bw.currCovenantAddr,
@@ -311,15 +383,18 @@ func (bw *BlockWatcher) handleMainChainTx(gormTx *gorm.DB, bchTx *wire.MsgTx) er
 				Vout:         uint32(vout),
 			}
 			if err = addToBeRecognized(gormTx, ccUtxo); err != nil {
-				return err
+				return false, err
 			}
 		}
 	}
-	return nil
+	return dbChanged, nil
 }
 
 func (bw *BlockWatcher) HandleMainChainBlock(blockHeight int64) error {
+	blockCount, err := bw.client.GetBlockCount()
+	fmt.Printf("main blockCount %d err %#v\n", blockCount, err)
 	hash, err := bw.client.GetBlockHash(blockHeight)
+	fmt.Printf("main height %d hash %#v\n", blockHeight, hash)
 	if err != nil { // block not ready
 		return ErrNoBlockFoundAtGivenHeight
 	}
@@ -327,15 +402,21 @@ func (bw *BlockWatcher) HandleMainChainBlock(blockHeight int64) error {
 	if err != nil {
 		panic(err) //impossible
 	}
+	dbChanged := false
 	err = bw.db.Transaction(func(gormTx *gorm.DB) error { // One DB-Transaction to update UTXO set and height
 		for _, bchTx := range blk.Transactions {
-			err = bw.handleMainChainTx(gormTx, bchTx)
+			changed, err := bw.handleMainChainTx(gormTx, bchTx)
+			dbChanged = dbChanged || changed
 			if err != nil {
 				return err
 			}
 		}
 		return updateMainChainHeight(gormTx, blockHeight)
 	})
+	if dbChanged {
+		fmt.Printf("AfterMain UTXOs\n")
+		printUtxoSet(bw.db)
+	}
 	return err
 }
 
@@ -423,51 +504,68 @@ func (bs *BlockScanner) GetBlockTime(ctx context.Context, blockHeight int64) (in
 }
 
 func (bs *BlockScanner) ScanBlock(ctx context.Context, timestamp, blockHeight int64) error {
-	var txList []*mevmtypes.Transaction
-	err := bs.rpcClient.CallContext(ctx, &txList, "sbch_getTxListByHeight", hexutil.EncodeUint64(uint64(blockHeight)))
+	var block Block
+	err := bs.rpcClient.CallContext(ctx, &block, "eth_getBlockByNumber", hexutil.EncodeUint64(uint64(blockHeight)), true)
 	if err != nil {
 		return err
 	}
-	txToBeParsed := make([]*mevmtypes.Transaction, 0, len(txList))
+	txList := block.Transactions
+	txToBeParsed := make([]*Transaction, 0, len(txList))
 	for _, tx := range txList {
-		if tx.To != CCContractAddress {
+		if common.HexToAddress(tx.To) != CCContractAddress {
 			continue
 		}
-		if len(tx.Input) < 4 || tx.Status != mevmtypes.ReceiptStatusSuccessful {
+		var tmp map[string]any
+		bs.rpcClient.CallContext(ctx, &tmp, "eth_getTransactionReceipt", tx.Hash)
+		fmt.Printf("DBG tx %#v\n", tmp)
+		err := bs.rpcClient.CallContext(ctx, tx, "eth_getTransactionReceipt", tx.Hash)
+		if err != nil {
+			return err
+		}
+		input := hexutil.MustDecode(tx.Input)
+		status := hexutil.MustDecodeUint64(tx.Status)
+		fmt.Printf("tx %#v\ninput: %#v status %d\n", tx, input, status)
+		if len(input) < 4 || status != mevmtypes.ReceiptStatusSuccessful {
 			continue
 		}
-		method, _ := bs.abi.MethodById(tx.Input[:4])
+		method, _ := bs.abi.MethodById(input[:4])
+		fmt.Printf("method %#v\n", method)
 		if method == nil {
 			continue
 		}
 		if method.Name == "handleUTXOs" {
 			updateLastRescanTime(bs.db, -1) // -1 means no pending startRescan needs to run handleUTXOs
-		} else if method.Name == "startRescan" && len(tx.Input) == 36 {
-			bs.parseStartRescan(ctx, timestamp, tx)
-			txToBeParsed = append(txToBeParsed, tx)
-		} else if method.Name == "handleUTXOs" || method.Name == "redeem" {
-			txToBeParsed = append(txToBeParsed, tx)
+		} else if method.Name == "startRescan" && len(input) == 36 {
+			bs.parseStartRescan(ctx, timestamp, tx, input)
 		}
+		txToBeParsed = append(txToBeParsed, tx)
 	}
+	fmt.Printf("txToBeParsed %#v\n", txToBeParsed)
+	metaInfo := getMetaInfo(bs.db)
 	err = bs.db.Transaction(func(gormTx *gorm.DB) error { // One DB-Transaction to update UTXO set and height
-		metaInfo := getMetaInfo(bs.db)
 		for _, tx := range txToBeParsed {
+			fmt.Printf("now tx %#v\n", tx)
 			bs.processReceipt(gormTx, tx, &metaInfo, int64(timestamp))
 		}
 		metaInfo.SideChainHeight = blockHeight
 		gormTx.Model(&metaInfo).Updates(metaInfo)
 		return nil
 	})
+	if len(txToBeParsed) != 0 {
+		fmt.Printf("AfterSide UTXOs\n")
+		printUtxoSet(bs.db)
+	}
 	return err
 }
 
-func (bs *BlockScanner) parseStartRescan(ctx context.Context, timestamp int64, tx *mevmtypes.Transaction) {
+func (bs *BlockScanner) parseStartRescan(ctx context.Context, timestamp int64, tx *Transaction, input []byte) {
 	start := 4+32-8
-	if len(tx.Input) < start {
+	if len(input) < start {
 		return
 	}
-	mainChainHeight := int64(binary.BigEndian.Uint64(tx.Input[start:]))
+	mainChainHeight := int64(binary.BigEndian.Uint64(input[start:]))
 	metaInfo := getMetaInfo(bs.db)
+	fmt.Printf("mainChainHeight %d metaInfo %#v\n", mainChainHeight, metaInfo)
 	watcher := &BlockWatcher{
 		db:               bs.db,
 		client:           bs.bchClient,
@@ -486,68 +584,78 @@ type ConvertParams struct {
 	CovenantAddr common.Address
 }
 
-func (bs *BlockScanner) processReceipt(gormTx *gorm.DB, tx *mevmtypes.Transaction,
-	metaInfo *MetaInfo, currTime int64) error {
+func (bs *BlockScanner) processReceipt(gormTx *gorm.DB, tx *Transaction, metaInfo *MetaInfo, currTime int64) error {
+	input := hexutil.MustDecode(tx.Input)
 	for _, log := range tx.Logs {
-		switch common.Hash(log.Topics[0]) {
+		data := hexutil.MustDecode(log.Data)
+		switch common.HexToHash(log.Topics[0]) {
 		//NewRedeemable(uint256 indexed txid, uint32 indexed vout, address indexed covenantAddr);
 		case EventNewRedeemable:
-			txid := string(log.Topics[1][:])
-			vout := binary.BigEndian.Uint32(log.Topics[2][28:])
-			addr := log.Topics[3][12:]
-			err := sideEvtRedeemable(gormTx, string(addr[:]), txid, vout)
+			txid := log.Topics[1][2:]
+			vout, _ := strconv.ParseInt(log.Topics[2][2+2+24*2:], 16, 64)
+			addr := common.HexToAddress(log.Topics[3][2+12*2:])
+			err := sideEvtRedeemable(gormTx, string(addr[:]), txid, uint32(vout))
+			fmt.Printf("EventNewRedeemable %s\n", log.Topics[1])
 			if err != nil {
 				return err
 			}
 		//NewLostAndFound(uint256 indexed txid, uint32 indexed vout, address indexed covenantAddr);
 		case EventNewLostAndFound:
-			txid := string(log.Topics[1][:])
-			vout := binary.BigEndian.Uint32(log.Topics[2][28:])
-			addr := log.Topics[3][12:]
-			err := sideEvtLostAndFound(gormTx, string(addr[:]), txid, vout)
+			fmt.Printf("EventNewLostAndFound\n")
+			txid := log.Topics[1][2:]
+			vout, _ := strconv.ParseInt(log.Topics[2][2+2+24*2:], 16, 64)
+			addr := common.HexToAddress(log.Topics[3][2+12*2:])
+			err := sideEvtLostAndFound(gormTx, string(addr[:]), txid, uint32(vout))
 			if err != nil {
 				return err
 			}
 		//Redeem(uint256 indexed txid, uint32 indexed vout, address indexed covenantAddr, uint8 sourceType);
 		case EventRedeem:
-			txid := string(log.Topics[1][:])
-			vout := binary.BigEndian.Uint32(log.Topics[2][28:])
-			addr := log.Topics[3][12:]
+			txid := log.Topics[1][2:]
+			fmt.Printf("EventRedeem %s\n", txid)
+			vout, _ := strconv.ParseInt(log.Topics[2][2+2+24*2:], 16, 64)
+			addr := common.HexToAddress(log.Topics[3][2+12*2:])
+			redeemTarget := BurnAddressMainChain // transfer-by-burning
 			//function redeem(uint256 txid, uint256 index, address targetAddress) external payable;
-			redeemTarget := string(tx.Input[32+32+12:])
-			err := sideEvtRedeem(gormTx, string(addr[:]), txid, vout, log.Data[31], redeemTarget,
+			if len(input) > 96 {
+				redeemTarget = string(input[32+32+12:])
+			}
+			err := sideEvtRedeem(gormTx, string(addr[:]), txid, uint32(vout), data[31], redeemTarget,
 				metaInfo, currTime)
 			if err != nil {
 				return err
 			}
 		//ChangeAddr(address indexed oldCovenantAddr, address indexed newCovenantAddr);
 		case EventChangeAddr:
-			oldCovenantAddr := log.Topics[1][12:]
-			newCovenantAddr := log.Topics[2][12:]
+			fmt.Printf("EventChangeAddr\n")
+			oldCovenantAddr := common.HexToAddress(log.Topics[1][2+12*2:])
+			newCovenantAddr := common.HexToAddress(log.Topics[2][2+12*2:])
 			err := sideEvtChangeAddr(gormTx, string(oldCovenantAddr[:]), string(newCovenantAddr[:]))
 			if err != nil {
 				return err
 			}
 		//Convert(uint256 indexed prevTxid, uint32 indexed prevVout, address indexed oldCovenantAddr, uint256 txid, uint32 vout, address newCovenantAddr);
 		case EventConvert:
-			prevTxid := string(log.Topics[1][:])
-			prevVout := binary.BigEndian.Uint32(log.Topics[2][28:])
+			fmt.Printf("EventConvert\n")
+			prevTxid := log.Topics[1][2:]
+			prevVout, _ := strconv.ParseInt(log.Topics[2][2+2+24*2:], 16, 64)
 			var params ConvertParams
-			err := bs.abi.UnpackIntoInterface(&params, "Convert", log.Data)
+			err := bs.abi.UnpackIntoInterface(&params, "Convert", data)
 			if err != nil {
 				return err
 			}
-			err = sideEvtConvert(gormTx, prevTxid, prevVout, string(params.Txid[:]), params.Vout,
+			err = sideEvtConvert(gormTx, prevTxid[:], uint32(prevVout), hex.EncodeToString(params.Txid[:]), params.Vout,
 				string(params.CovenantAddr[:]))
 			if err != nil {
 				return err
 			}
 		//Deleted(uint256 indexed txid, uint32 indexed vout, address indexed covenantAddr, uint8 sourceType);
 		case EventDeleted:
-			txid := string(log.Topics[1][:])
-			vout := binary.BigEndian.Uint32(log.Topics[2][28:])
-			addr := log.Topics[3][12:]
-			err := sideEvtDeleted(gormTx, string(addr[:]), txid, vout, log.Data[31])
+			txid := log.Topics[1][2:]
+			fmt.Printf("EventDeleted %s\n", txid)
+			vout, _ := strconv.ParseInt(log.Topics[2][2+2+24*2:], 16, 64)
+			addr := common.HexToAddress(log.Topics[3][2+12*2:])
+			err := sideEvtDeleted(gormTx, string(addr[:]), txid, uint32(vout), data[31])
 			if err != nil {
 				return err
 			}

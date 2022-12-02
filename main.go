@@ -7,7 +7,7 @@ import (
 	"fmt"
 
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/gcash/bchd/rpcclient"
 	sbchrpcclient "github.com/smartbch/smartbch/rpc/client"
@@ -47,8 +47,10 @@ func catchup() {
 	if err != nil {
 		panic(err)
 	}
-	currCovenantAddr := common.HexToAddress(ccInfo.CurrCovenantAddress)
-	lastCovenantAddr := common.HexToAddress(ccInfo.LastCovenantAddress)
+	fmt.Printf("%#v\n", ccInfo)
+	currCovenantAddr := hexutil.MustDecode(ccInfo.CurrCovenantAddress)
+	lastCovenantAddr := hexutil.MustDecode(ccInfo.LastCovenantAddress)
+	fmt.Printf("CovenantAddr %s last %s\n", monitor.ScriptHashToAddr(currCovenantAddr), monitor.ScriptHashToAddr(lastCovenantAddr))
 
 	connCfg := &rpcclient.ConnConfig{
 		Host:         mainnetUrl,
@@ -57,6 +59,7 @@ func catchup() {
 		HTTPPostMode: true,
 		DisableTLS:   true,
 	}
+	fmt.Printf("connCfg %#v\n", connCfg)
 	bchClient, err := rpcclient.New(connCfg, nil)
 	if err != nil {
 		panic(err)
@@ -64,12 +67,13 @@ func catchup() {
 	db := monitor.OpenDB(dbPath)
 	info := monitor.MetaInfo{
 		LastRescanTime:   -1,
-		ScannedHeight:    0,
-		MainChainHeight:  0,
-		SideChainHeight:  0,
-		CurrCovenantAddr: string(lastCovenantAddr[:]),
-		LastCovenantAddr: string(currCovenantAddr[:]),
+		ScannedHeight:    1525000,
+		MainChainHeight:  1525000,
+		SideChainHeight:  52000,
+		LastCovenantAddr: string(lastCovenantAddr[:]),
+		CurrCovenantAddr: string(currCovenantAddr[:]),
 	}
+	monitor.MigrateSchema(db)
 	monitor.InitMetaInfo(db, &info)
 	bs := monitor.NewBlockScanner(bchClient, db, sideChainUrl)
 	monitor.Catchup(bs)
