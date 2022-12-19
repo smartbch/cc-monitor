@@ -2,7 +2,6 @@ package monitor
 
 import (
 	"context"
-	"runtime/debug"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +9,7 @@ import (
 	"fmt"
 	"gorm.io/gorm"
 	"math/big"
+	"runtime/debug"
 	"strconv"
 	"time"
 
@@ -54,25 +54,25 @@ type Block struct {
 }
 
 type Transaction struct {
-	Hash              string  `json:"hash"`
-	TransactionIndex  string  `json:"transactionIndex"`
-	Nonce             string  `json:"nonce"`
-	BlockHash         string  `json:"blockHash"`
-	BlockNumber       string  `json:"blockNumber"`
-	From              string  `json:"from"`
-	To                string  `json:"to"`
-	Value             string  `json:"value"`
-	GasPrice          string  `json:"gasPrice"`
-	Gas               string  `json:"gas"`
-	Input             string  `json:"input"`
-	CumulativeGasUsed string  `json:"cumulativeGasUsed"`
-	GasUsed           string  `json:"gasUsed"`
-	ContractAddress   string  `json:"contractAddress"`
-	Logs              []Log   `json:"logs"`
-	LogsBloom         string  `json:"logsBloom"`
-	Status            string  `json:"status"`
-	StatusStr         string  `json:"statusStr"`
-	OutData           string  `json:"outData"`
+	Hash              string `json:"hash"`
+	TransactionIndex  string `json:"transactionIndex"`
+	Nonce             string `json:"nonce"`
+	BlockHash         string `json:"blockHash"`
+	BlockNumber       string `json:"blockNumber"`
+	From              string `json:"from"`
+	To                string `json:"to"`
+	Value             string `json:"value"`
+	GasPrice          string `json:"gasPrice"`
+	Gas               string `json:"gas"`
+	Input             string `json:"input"`
+	CumulativeGasUsed string `json:"cumulativeGasUsed"`
+	GasUsed           string `json:"gasUsed"`
+	ContractAddress   string `json:"contractAddress"`
+	Logs              []Log  `json:"logs"`
+	LogsBloom         string `json:"logsBloom"`
+	Status            string `json:"status"`
+	StatusStr         string `json:"statusStr"`
+	OutData           string `json:"outData"`
 }
 
 type Log struct {
@@ -92,10 +92,10 @@ func SendStartRescanAndHandleUTXO(ctx context.Context, client *ethclient.Client,
 	height := lastRescanHeight + 1
 	sendHandleUtxo := false
 	for {
-		_, err := bchClient.GetBlockHash(height + 9)
+		_, err := bchClient.GetBlockHash(height + 1)
 		if err != nil {
 			time.Sleep(30 * time.Second)
-			fmt.Printf("get block %d hash err:%s\n", height+9, err)
+			fmt.Printf("get block %d hash err:%s\n", height+1, err)
 			continue
 		}
 		fmt.Printf("mainnet height:%d\n", height)
@@ -185,12 +185,12 @@ func MainLoop(bs *BlockScanner, sbchClient *sbchrpcclient.Client) {
 			continue
 		}
 		metaInfo = getMetaInfo(bs.db) // MetaInfo may get updated during processing, so we reload it
-		if metaInfo.LastRescanTime > 0 && metaInfo.LastRescanTime + SendHandleUtxoDelay < time.Now().Unix() {
+		if metaInfo.LastRescanTime > 0 && metaInfo.LastRescanTime+SendHandleUtxoDelay < time.Now().Unix() {
 			sendHandleUtxoTransaction(ctx, bs.ethClient, sbchClient) // it will loop util succeed
 		}
 		bs.CheckSlidingWindow(ctx, timestamp, &metaInfo)
 		// check mainchain's new blocks every 20 sidechain blocks
-		if height % 20 == 0 {
+		if height%20 == 0 {
 			err, needRescan := bs.CheckMainChainForRescan(metaInfo)
 			if err != nil {
 				if fatalErr, ok := err.(FatalError); ok {
@@ -243,7 +243,7 @@ type CCTxCounter struct {
 // if the block at 'blockHeight' is finalized, analyze its transactions to increase 'ccTxCount'
 // if the block exists (no matter finalized or not), check evil transactions in it.
 func (txc *CCTxCounter) CheckMainChainBlock(gormTx *gorm.DB, blockHeight int64) error {
-	_, err := txc.client.GetBlockHash(blockHeight + 9) // is this block finalized?
+	_, err := txc.client.GetBlockHash(blockHeight + 1) // is this block finalized?
 	isFinalized := err == nil
 	hash, err := txc.client.GetBlockHash(blockHeight) // even if it is not finalized, we still need checkEvilTx
 	if err != nil {
@@ -363,7 +363,7 @@ func (bw *BlockWatcher) handleMainChainTx(gormTx *gorm.DB, bchTx *wire.MsgTx) (b
 	covenantAddr := ScriptHashToAddr([]byte(bw.currCovenantAddr))
 	for vout, txout := range bchTx.TxOut {
 		scrClass, addrs, _, err := txscript.ExtractPkScriptAddrs(txout.PkScript, NetParams)
-		if err != nil ||  len(addrs) != 1 {
+		if err != nil || len(addrs) != 1 {
 			continue
 		}
 		addr := addrs[0].ScriptAddress()
@@ -441,11 +441,11 @@ func NewBlockScanner(bchClient *rpcclient.Client, db *gorm.DB, sideChainUrl stri
 		panic(err)
 	}
 	return &BlockScanner{
-		bchClient:      bchClient,
-		db:             db,
-		rpcClient:      rpcClient,
-		ethClient:      ethClient,
-		abi:            ccabi.ABI.GetABI(),
+		bchClient: bchClient,
+		db:        db,
+		rpcClient: rpcClient,
+		ethClient: ethClient,
+		abi:       ccabi.ABI.GetABI(),
 	}
 
 }
@@ -486,7 +486,7 @@ func (bs *BlockScanner) CheckMainChainForRescan(metaInfo MetaInfo) (error, bool)
 		}
 		height++ //try to find the next new block
 	}
-	needRescan := txCounter.ccTxCount > 0 || metaInfo.ScannedHeight + RescanThreshold < height
+	needRescan := txCounter.ccTxCount > 0 || metaInfo.ScannedHeight+RescanThreshold < height
 	return nil, needRescan
 }
 
@@ -559,7 +559,7 @@ func (bs *BlockScanner) ScanBlock(ctx context.Context, timestamp, blockHeight in
 }
 
 func (bs *BlockScanner) parseStartRescan(ctx context.Context, timestamp int64, tx *Transaction, input []byte) {
-	start := 4+32-8
+	start := 4 + 32 - 8
 	if len(input) < start {
 		return
 	}
