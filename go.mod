@@ -8,7 +8,7 @@ require (
 	github.com/gcash/bchd v0.19.0
 	github.com/smartbch/cc-operator v0.0.0-20221121012319-1b9f3269eff6
 	github.com/smartbch/moeingevm v0.4.2-0.20220509120345-27a3d288346f
-	github.com/smartbch/smartbch v0.4.5-0.20221124065050-319e182259f0
+	github.com/smartbch/smartbch v0.4.5-0.20221219024420-8cce0cf58d30
 	github.com/stretchr/testify v1.7.2
 	gorm.io/driver/sqlite v1.3.6
 	gorm.io/gorm v1.23.8
@@ -52,5 +52,3 @@ require (
 	gopkg.in/natefinch/npipe.v2 v2.0.0-20160621034901-c1b8fa8bdcce // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/smartbch/cc-operator => ../cc-operator

@@ -6,9 +6,10 @@ import (
 	"flag"
 	"fmt"
 
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/gcash/bchd/rpcclient"
 	sbchrpcclient "github.com/smartbch/smartbch/rpc/client"
 
@@ -27,17 +28,20 @@ var (
 	lastRescanHeight  int64
 	lastRescanTime    int64
 )
+
 const (
 	handleUtxoDelay int64 = 1 * 60
 )
 
 func main() {
-	catchup()
+	run()
 	//simpleRun()
 }
 
-func catchup() {
+func run() {
 	parseFlags()
+	//monitor.ReadPrivKey()
+	monitor.LoadPrivKeyInHex("8a93af6864fa0f32521e7ffab043020a1346ed92228faa07906b293c86f3416e")
 	sbchClient, err := sbchrpcclient.Dial(sideChainUrl)
 	if err != nil {
 		panic(err)
@@ -67,9 +71,9 @@ func catchup() {
 	db := monitor.OpenDB(dbPath)
 	info := monitor.MetaInfo{
 		LastRescanTime:   -1,
-		ScannedHeight:    1525000,
-		MainChainHeight:  1525000,
-		SideChainHeight:  52000,
+		ScannedHeight:    int64(ccInfo.RescannedHeight),
+		MainChainHeight:  1531570,
+		SideChainHeight:  1,
 		LastCovenantAddr: string(lastCovenantAddr[:]),
 		CurrCovenantAddr: string(currCovenantAddr[:]),
 	}
@@ -77,6 +81,7 @@ func catchup() {
 	monitor.InitMetaInfo(db, &info)
 	bs := monitor.NewBlockScanner(bchClient, db, sideChainUrl)
 	monitor.Catchup(bs)
+	monitor.MainLoop(bs, sbchClient)
 }
 
 func parseFlags() {
@@ -93,7 +98,11 @@ func parseFlags() {
 
 func simpleRun() {
 	parseFlags()
-	c, err := ethclient.Dial(sideChainUrl)
+	rpcClient, err := rpc.Dial(sideChainUrl)
+	if err != nil {
+		panic(err)
+	}
+	ethClient, err := ethclient.Dial(sideChainUrl)
 	if err != nil {
 		panic(err)
 	}
@@ -119,6 +128,6 @@ func simpleRun() {
 	monitor.MyAddress = crypto.PubkeyToAddress(monitor.MyPrivKey.PublicKey)
 	fmt.Printf("monitor: %s\n", monitor.MyAddress.String())
 	//defer client.Shutdown()
-	monitor.SendStartRescanAndHandleUTXO(context.Background(), c, client, lastRescanHeight, lastRescanTime, handleUtxoDelay)
+	monitor.SendStartRescanAndHandleUTXO(context.Background(), rpcClient, ethClient, client, lastRescanHeight, lastRescanTime, handleUtxoDelay)
 	select {}
 }

@@ -2,9 +2,9 @@ package monitor
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
-	"os"
 
 	"github.com/stretchr/testify/require"
 	//"gorm.io/gorm"
@@ -19,15 +19,15 @@ import (
 //func updateCovenantAddr(tx *gorm.DB, lastAddr, currAddr string) error {
 
 func (m *MetaInfo) Equals(x MetaInfo) bool {
-	return  m.LastRescanTime   == x.LastRescanTime   &&
-		m.ScannedHeight    == x.ScannedHeight    &&
-		m.MainChainHeight  == x.MainChainHeight  &&
-		m.SideChainHeight  == x.SideChainHeight  &&
+	return m.LastRescanTime == x.LastRescanTime &&
+		m.ScannedHeight == x.ScannedHeight &&
+		m.MainChainHeight == x.MainChainHeight &&
+		m.SideChainHeight == x.SideChainHeight &&
 		m.CurrCovenantAddr == x.CurrCovenantAddr &&
 		m.LastCovenantAddr == x.LastCovenantAddr &&
-		m.AmountX24        == x.AmountX24        &&
-		m.TimestampX24     == x.TimestampX24     &&
-		m.IsPaused         == x.IsPaused
+		m.AmountX24 == x.AmountX24 &&
+		m.TimestampX24 == x.TimestampX24 &&
+		m.IsPaused == x.IsPaused
 }
 
 func TestSlidingWindow(t *testing.T) {
@@ -37,21 +37,21 @@ func TestSlidingWindow(t *testing.T) {
 	for i := 0; i < 24; i++ {
 		info.incrAmountInSlidingWindow(1, int64(3600*i))
 	}
-	sum := info.getSumInSlidingWindow(3600*23)
+	sum := info.getSumInSlidingWindow(3600 * 23)
 	require.Equal(t, int64(24), sum)
-	sum = info.getSumInSlidingWindow(3600*24)
+	sum = info.getSumInSlidingWindow(3600 * 24)
 	require.Equal(t, int64(23), sum)
-	sum = info.getSumInSlidingWindow(3600*25)
+	sum = info.getSumInSlidingWindow(3600 * 25)
 	require.Equal(t, int64(22), sum)
-	sum = info.getSumInSlidingWindow(3600*36)
+	sum = info.getSumInSlidingWindow(3600 * 36)
 	require.Equal(t, int64(11), sum)
 	info.incrAmountInSlidingWindow(5, int64(3600*25))
-	sum = info.getSumInSlidingWindow(3600*25)
+	sum = info.getSumInSlidingWindow(3600 * 25)
 	require.Equal(t, int64(27), sum)
 	info.incrAmountInSlidingWindow(5, int64(3600*25)+10)
-	sum = info.getSumInSlidingWindow(3600*25)
+	sum = info.getSumInSlidingWindow(3600 * 25)
 	require.Equal(t, int64(32), sum)
-	sum = info.getSumInSlidingWindow(3600*36)
+	sum = info.getSumInSlidingWindow(3600 * 36)
 	require.Equal(t, int64(21), sum)
 }
 
@@ -88,9 +88,9 @@ func TestDB0(t *testing.T) {
 	os.RemoveAll("./testdb.db")
 }
 
-	// ToBeRecognized     (sideEvtRedeem)           Redeeming (burning address)
-	// Redeeming          (mainEvtRedeemOrReturn)   RedeemingToDel
-	// RedeemingToDel     (sideEvtDeleted)          DELETED
+// ToBeRecognized     (sideEvtRedeem)           Redeeming (burning address)
+// Redeeming          (mainEvtRedeemOrReturn)   RedeemingToDel
+// RedeemingToDel     (sideEvtDeleted)          DELETED
 func TestDB1(t *testing.T) {
 	os.RemoveAll("./testdb.db")
 	db := OpenDB("./testdb.db")
@@ -146,10 +146,10 @@ func TestDB1(t *testing.T) {
 	os.RemoveAll("./testdb.db")
 }
 
-	// ToBeRecognized     (sideEvtRedeemable)       Redeemable
-	// Redeemable         (sideEvtRedeem)           Redeeming
-	// Redeeming          (mainEvtRedeemOrReturn)   RedeemingToDel
-	// RedeemingToDel     (sideEvtDeleted)          DELETED
+// ToBeRecognized     (sideEvtRedeemable)       Redeemable
+// Redeemable         (sideEvtRedeem)           Redeeming
+// Redeeming          (mainEvtRedeemOrReturn)   RedeemingToDel
+// RedeemingToDel     (sideEvtDeleted)          DELETED
 func TestDB2(t *testing.T) {
 	os.RemoveAll("./testdb.db")
 	db := OpenDB("./testdb.db")
@@ -199,10 +199,10 @@ func TestDB2(t *testing.T) {
 	require.Nil(t, err)
 }
 
-	// ToBeRecognized     (sideEvtLostAndFound)     LostAndFound
-	// LostAndFound       (sideEvtRedeem)           LostAndReturn
-	// LostAndReturn      (mainEvtRedeemOrReturn)   LostAndReturnToDel
-	// LostAndReturnToDel (sideEvtDeleted)          DELETED
+// ToBeRecognized     (sideEvtLostAndFound)     LostAndFound
+// LostAndFound       (sideEvtRedeem)           LostAndReturn
+// LostAndReturn      (mainEvtRedeemOrReturn)   LostAndReturnToDel
+// LostAndReturnToDel (sideEvtDeleted)          DELETED
 func TestDB3(t *testing.T) {
 	os.RemoveAll("./testdb.db")
 	db := OpenDB("./testdb.db")
@@ -248,9 +248,9 @@ func TestDB3(t *testing.T) {
 	require.Nil(t, err)
 }
 
-	// Redeemable         (sideEvtChangeAddr)       HandingOver
-	// HandingOver        (mainEvtFinishConverting) HandedOver
-	// HandedOver         (sideEvtConvert)          Redeemable
+// Redeemable         (sideEvtChangeAddr)       HandingOver
+// HandingOver        (mainEvtFinishConverting) HandedOver
+// HandedOver         (sideEvtConvert)          Redeemable
 func TestDB4(t *testing.T) {
 	os.RemoveAll("./testdb.db")
 	db := OpenDB("./testdb.db")
@@ -292,7 +292,7 @@ func TestDB4(t *testing.T) {
 	require.True(t, strings.Index(err.Error(), "UTXO's recorded covenantAddr") > 0)
 	err = mainEvtFinishConverting(db, "txid1", 0, "ccaddr2", "txid2", 1, true)
 	require.Nil(t, err)
-	err = sideEvtConvert(db, "txid1", 0, "txid2", 1, "wrong_ccaddr2")//DBG
+	err = sideEvtConvert(db, "txid1", 0, "txid2", 1, "wrong_ccaddr2") //DBG
 	require.True(t, strings.Index(err.Error(), "UTXO's recorded covenantAddr") > 0)
 	err = sideEvtConvert(db, "txid1", 0, "wrong_txid2", 1, "ccaddr2")
 	require.True(t, strings.Index(err.Error(), "mismatch of newTxid/newVout") > 0)
@@ -404,5 +404,3 @@ func TestMetaInfo(t *testing.T) {
 	require.True(t, info.Equals(info2))
 	os.RemoveAll("./testmeta.db")
 }
-
-

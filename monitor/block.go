@@ -31,8 +31,8 @@ import (
 
 const (
 	ScanSideChainInterval = 6 * time.Second
-	SendHandleUtxoDelay   = 22 * 60
-	RescanThreshold       = 9
+	SendHandleUtxoDelay   = 12 * 60 // 22 * 60
+	RescanThreshold       = 3
 	ThresholdIn24Hours    = 1000_0000_0000 // 1000 BCH
 )
 
@@ -88,20 +88,21 @@ type Log struct {
 }
 
 // A simple function. Just used during debug.
-func SendStartRescanAndHandleUTXO(ctx context.Context, client *ethclient.Client, bchClient *rpcclient.Client, lastRescanHeight, lastRescanTime, handleUtxoDelay int64) {
+func SendStartRescanAndHandleUTXO(ctx context.Context, rawclient *rpc.Client, client *ethclient.Client, bchClient *rpcclient.Client, lastRescanHeight, lastRescanTime, handleUtxoDelay int64) {
 	height := lastRescanHeight + 1
 	sendHandleUtxo := false
+	finalizeBlockCount := 1
 	for {
-		_, err := bchClient.GetBlockHash(height + 1)
+		_, err := bchClient.GetBlockHash(height + finalizeBlockCount)
 		if err != nil {
 			time.Sleep(30 * time.Second)
-			fmt.Printf("get block %d hash err:%s\n", height+1, err)
+			fmt.Printf("get block %d hash err:%s\n", height + finalizeBlockCount, err)
 			continue
 		}
 		fmt.Printf("mainnet height:%d\n", height)
 		if lastRescanHeight+2 <= height {
 			callData := ccabi.PackStartRescanFunc(big.NewInt(height))
-			txHash, err := sendTransaction(ctx, client, MyAddress, CCAddress, callData)
+			txHash, err := sendTransaction(ctx, rawclient, client, MyAddress, CCAddress, callData)
 			if err != nil {
 				fmt.Printf("Error in sendStartRescanTransaction: %#v\n", err)
 			}
@@ -119,7 +120,7 @@ func SendStartRescanAndHandleUTXO(ctx context.Context, client *ethclient.Client,
 		time.Sleep(30 * time.Second)
 		if lastRescanTime+handleUtxoDelay < time.Now().Unix() && sendHandleUtxo {
 			callData := ccabi.PackHandleUTXOsFunc()
-			txHash, err := sendTransaction(ctx, client, MyAddress, CCAddress, callData)
+			txHash, err := sendTransaction(ctx, rawclient, client, MyAddress, CCAddress, callData)
 			if err != nil {
 				fmt.Printf("Error in sendHandleUtxoTransaction: %#v\n", err)
 			}
@@ -138,6 +139,7 @@ func SendStartRescanAndHandleUTXO(ctx context.Context, client *ethclient.Client,
 }
 
 func TriggerDamageControl(fatalErr FatalError) {
+	fmt.Printf("TriggerDamageControl %#v\n", fatalErr)
 }
 
 // catch up the latest height of smartBCH
@@ -164,13 +166,15 @@ func Catchup(bs *BlockScanner) {
 		fmt.Printf("Timestamp %d\n", timestamp)
 		err = bs.ScanBlock(ctx, timestamp, height)
 		if err != nil {
-			if fatalErr, ok := err.(FatalError); ok {
-				panic(fatalErr)
-			} else {
-				fmt.Printf("Error in ScanBlock: %s\n", err.Error())
-			}
+			fmt.Printf("Error in ScanBlock: %s\n", err.Error())
+			//if fatalErr, ok := err.(FatalError); ok {
+			//		panic(fatalErr)
+			//	} else {
+			//		fmt.Printf("Error in ScanBlock: %s\n", err.Error())
+			//	}
 		}
 	}
+	fmt.Printf("Catchup Finished, endHeight = %d\n", endHeight)
 }
 
 func MainLoop(bs *BlockScanner, sbchClient *sbchrpcclient.Client) {
@@ -184,14 +188,21 @@ func MainLoop(bs *BlockScanner, sbchClient *sbchrpcclient.Client) {
 			fmt.Printf("Error in GetBlockTime: %s\n", err.Error())
 			continue
 		}
-		metaInfo = getMetaInfo(bs.db) // MetaInfo may get updated during processing, so we reload it
-		if metaInfo.LastRescanTime > 0 && metaInfo.LastRescanTime+SendHandleUtxoDelay < time.Now().Unix() {
-			sendHandleUtxoTransaction(ctx, bs.ethClient, sbchClient) // it will loop util succeed
+		ccInfo, err := sbchClient.CcInfo(ctx)
+		if err != nil {
+			fmt.Printf("Error in CcInfo %s\n", err.Error())
+			continue
 		}
+		fmt.Printf("[MainLoop] now: %d ccInfo: %#v\n", time.Now().Unix(), ccInfo)
+		if ccInfo.RescanTime > 0 && ccInfo.RescanTime+SendHandleUtxoDelay < time.Now().Unix() && !ccInfo.UTXOAlreadyHandled {
+			sendHandleUtxoTransaction(ctx, bs.rpcClient, bs.ethClient, sbchClient) // it will loop util succeed
+		}
+		metaInfo = getMetaInfo(bs.db) // MetaInfo may get updated during processing, so we reload it
 		bs.CheckSlidingWindow(ctx, timestamp, &metaInfo)
+		fmt.Printf("SideChainHeight: %d\n", height)
 		// check mainchain's new blocks every 20 sidechain blocks
 		if height%20 == 0 {
-			err, needRescan := bs.CheckMainChainForRescan(metaInfo)
+			err, endRescanHeight := bs.CheckMainChainForRescan(metaInfo)
 			if err != nil {
 				if fatalErr, ok := err.(FatalError); ok {
 					TriggerDamageControl(fatalErr)
@@ -199,18 +210,18 @@ func MainLoop(bs *BlockScanner, sbchClient *sbchrpcclient.Client) {
 					fmt.Printf("Error in CheckMainChainForRescan: %s\n", err.Error())
 				}
 			}
-			if needRescan {
-				sendStartRescanTransaction(ctx, bs.ethClient, sbchClient, height, metaInfo.ScannedHeight)
+			if endRescanHeight != 0 {
+				sendStartRescanTransaction(ctx, bs.rpcClient, bs.ethClient, sbchClient, metaInfo.ScannedHeight, endRescanHeight)
 			}
 		}
 		// scan sidechain's blocks
 		err = bs.ScanBlock(ctx, timestamp, height)
 		if err != nil {
-			if fatalErr, ok := err.(FatalError); ok {
-				TriggerDamageControl(fatalErr)
-			} else {
-				fmt.Printf("Error in ScanBlock: %s\n", err.Error())
-			}
+			//if fatalErr, ok := err.(FatalError); ok {
+			//	TriggerDamageControl(fatalErr)
+			//} else {
+			fmt.Printf("Error in ScanBlock: %s\n", err.Error())
+			//	}
 		} else {
 			height++
 		}
@@ -242,12 +253,13 @@ type CCTxCounter struct {
 
 // if the block at 'blockHeight' is finalized, analyze its transactions to increase 'ccTxCount'
 // if the block exists (no matter finalized or not), check evil transactions in it.
-func (txc *CCTxCounter) CheckMainChainBlock(gormTx *gorm.DB, blockHeight int64) error {
-	_, err := txc.client.GetBlockHash(blockHeight + 1) // is this block finalized?
-	isFinalized := err == nil
+func (txc *CCTxCounter) CheckMainChainBlock(gormTx *gorm.DB, blockHeight int64) (err error, isFinalized bool) {
+	_, err = txc.client.GetBlockHash(blockHeight + 9) // is this block finalized?
+	isFinalized = err == nil
+	fmt.Printf("CheckMainChainBlock height %d isFinalized %v\n", blockHeight, isFinalized)
 	hash, err := txc.client.GetBlockHash(blockHeight) // even if it is not finalized, we still need checkEvilTx
 	if err != nil {
-		return ErrNoBlockFoundAtGivenHeight
+		return ErrNoBlockFoundAtGivenHeight, isFinalized
 	}
 	hash, err = txc.client.GetBlockHash(blockHeight)
 	if err != nil {
@@ -264,7 +276,7 @@ func (txc *CCTxCounter) CheckMainChainBlock(gormTx *gorm.DB, blockHeight int64) 
 			}
 		}
 	}
-	return txc.checkEvilTx(gormTx, blk)
+	return txc.checkEvilTx(gormTx, blk), isFinalized
 }
 
 // If an evil transaction is sent, then very bad thing happend: operators' private keys are stolen
@@ -286,14 +298,16 @@ func (txc *CCTxCounter) checkEvilTx(gormTx *gorm.DB, blk *wire.MsgBlock) error {
 				debug.PrintStack()
 				return NewFatal(fmt.Sprintf("[EVIL] cannot parse output %#v\n", bchTx))
 			}
+			oldTxid := hex.EncodeToString(reverse(txin.PreviousOutPoint.Hash[:]))
+			oldVout := txin.PreviousOutPoint.Index
 			if scrClass == txscript.ScriptHashTy { // P2SH
 				addr := addrs[0].ScriptAddress()
-				oldTxid := hex.EncodeToString(reverse(txin.PreviousOutPoint.Hash[:]))
-				oldVout := txin.PreviousOutPoint.Index
+				fmt.Printf("[checkEvilTx] mainEvtFinishConverting %s-%d => %s-%d\n", oldTxid, oldVout, txid, 0)
 				err = mainEvtFinishConverting(gormTx, oldTxid, oldVout, string(addr[:]), txid, 0, false)
 			} else if scrClass == txscript.PubKeyHashTy { // P2PKH
 				addr := addrs[0].ScriptAddress()
-				err = mainEvtRedeemOrReturn(gormTx, txid, 0, string(addr[:]), false)
+				fmt.Printf("[checkEvilTx] mainEvtRedeemOrReturn %s-%d in %s\n", oldTxid, oldVout, txid)
+				err = mainEvtRedeemOrReturn(gormTx, oldTxid, oldVout, string(addr[:]), false)
 			} else {
 				debug.PrintStack()
 				return NewFatal(fmt.Sprintf("[EVIL] invalid srcClass %#v\n", bchTx))
@@ -344,12 +358,13 @@ func (bw *BlockWatcher) handleMainChainTx(gormTx *gorm.DB, bchTx *wire.MsgTx) (b
 		}
 		oldTxid := hex.EncodeToString(reverse(txin.PreviousOutPoint.Hash[:]))
 		oldVout := txin.PreviousOutPoint.Index
-		fmt.Printf("TXIN %s-%d\n", oldTxid, oldVout)
 		if scrClass == txscript.ScriptHashTy { // P2SH
 			addr := addrs[0].ScriptAddress()
+			fmt.Printf("mainEvtFinishConverting %s-%d => %s-%d\n", oldTxid, oldVout, txid, 0)
 			err = mainEvtFinishConverting(gormTx, oldTxid, oldVout, string(addr[:]), txid, 0, true)
 		} else if scrClass == txscript.PubKeyHashTy { //P2PKH
 			addr := addrs[0].ScriptAddress()
+			fmt.Printf("mainEvtRedeemOrReturn %s-%d in %s\n", oldTxid, oldVout, txid)
 			err = mainEvtRedeemOrReturn(gormTx, oldTxid, oldVout, string(addr[:]), true)
 		} else {
 			debug.PrintStack()
@@ -457,19 +472,19 @@ func (bs *BlockScanner) CheckSlidingWindow(ctx context.Context, timestamp int64,
 	if sum > ThresholdIn24Hours && !metaInfo.IsPaused {
 		changeIsPaused = true
 		metaInfo.IsPaused = true
-		sendPauseTransaction(ctx, bs.ethClient)
+		sendPauseTransaction(ctx, bs.rpcClient, bs.ethClient)
 	}
 	if sum < ThresholdIn24Hours && metaInfo.IsPaused {
 		changeIsPaused = true
 		metaInfo.IsPaused = false
-		sendResumeTransaction(ctx, bs.ethClient)
+		sendResumeTransaction(ctx, bs.rpcClient, bs.ethClient)
 	}
 	if changeIsPaused {
 		bs.db.Model(&metaInfo).Updates(metaInfo)
 	}
 }
 
-func (bs *BlockScanner) CheckMainChainForRescan(metaInfo MetaInfo) (error, bool) {
+func (bs *BlockScanner) CheckMainChainForRescan(metaInfo MetaInfo) (err error, lastFinalizedHeight int64) {
 	height := metaInfo.ScannedHeight + 1
 	txCounter := &CCTxCounter{
 		currCovenantAddr: metaInfo.CurrCovenantAddr,
@@ -477,17 +492,24 @@ func (bs *BlockScanner) CheckMainChainForRescan(metaInfo MetaInfo) (error, bool)
 		utxoSet:          getUtxoSet(bs.db, false), // get all the UTXOs for checkEvilTx
 	}
 	for {
-		err := txCounter.CheckMainChainBlock(bs.db, height)
+		err, isFinalized := txCounter.CheckMainChainBlock(bs.db, height)
+		if isFinalized {
+			lastFinalizedHeight = height
+		}
 		if errors.Is(err, ErrNoBlockFoundAtGivenHeight) { // no new blocks
 			break
 		}
 		if err != nil {
-			return err, false
+			return err, 0
 		}
 		height++ //try to find the next new block
 	}
-	needRescan := txCounter.ccTxCount > 0 || metaInfo.ScannedHeight+RescanThreshold < height
-	return nil, needRescan
+	needRescan := txCounter.ccTxCount > 0 || metaInfo.ScannedHeight+RescanThreshold < lastFinalizedHeight
+	fmt.Printf("CheckMainChainForRescan %v txCounter %d ScannedHeight %d LatestHeight %d\n", needRescan, txCounter.ccTxCount, metaInfo.ScannedHeight, height)
+	if needRescan {
+		return nil, lastFinalizedHeight
+	}
+	return nil, 0
 }
 
 func (bs *BlockScanner) GetBlockTime(ctx context.Context, blockHeight int64) (int64, error) {
@@ -509,6 +531,7 @@ func (bs *BlockScanner) ScanBlock(ctx context.Context, timestamp, blockHeight in
 	if err != nil {
 		return err
 	}
+	fmt.Printf("ScanSideChainBlock %d\n", blockHeight)
 	txList := block.Transactions
 	txToBeParsed := make([]*Transaction, 0, len(txList))
 	for _, tx := range txList {
@@ -545,7 +568,10 @@ func (bs *BlockScanner) ScanBlock(ctx context.Context, timestamp, blockHeight in
 	err = bs.db.Transaction(func(gormTx *gorm.DB) error { // One DB-Transaction to update UTXO set and height
 		for _, tx := range txToBeParsed {
 			fmt.Printf("now tx %#v\n", tx)
-			bs.processReceipt(gormTx, tx, &metaInfo, int64(timestamp))
+			err := bs.processReceipt(gormTx, tx, &metaInfo, int64(timestamp))
+			if err != nil {
+				return err
+			}
 		}
 		metaInfo.SideChainHeight = blockHeight
 		gormTx.Model(&metaInfo).Updates(metaInfo)
@@ -595,13 +621,13 @@ func (bs *BlockScanner) processReceipt(gormTx *gorm.DB, tx *Transaction, metaInf
 			vout, _ := strconv.ParseInt(log.Topics[2][2+2+24*2:], 16, 64)
 			addr := common.HexToAddress(log.Topics[3][2+12*2:])
 			err := sideEvtRedeemable(gormTx, string(addr[:]), txid, uint32(vout))
-			fmt.Printf("EventNewRedeemable %s\n", log.Topics[1])
+			fmt.Printf("sideEvtNewRedeemable %s err %#v\n", log.Topics[1], err)
 			if err != nil {
 				return err
 			}
 		//NewLostAndFound(uint256 indexed txid, uint32 indexed vout, address indexed covenantAddr);
 		case EventNewLostAndFound:
-			fmt.Printf("EventNewLostAndFound\n")
+			fmt.Printf("sideEvtNewLostAndFound\n")
 			txid := log.Topics[1][2:]
 			vout, _ := strconv.ParseInt(log.Topics[2][2+2+24*2:], 16, 64)
 			addr := common.HexToAddress(log.Topics[3][2+12*2:])
@@ -612,7 +638,7 @@ func (bs *BlockScanner) processReceipt(gormTx *gorm.DB, tx *Transaction, metaInf
 		//Redeem(uint256 indexed txid, uint32 indexed vout, address indexed covenantAddr, uint8 sourceType);
 		case EventRedeem:
 			txid := log.Topics[1][2:]
-			fmt.Printf("EventRedeem %s\n", txid)
+			fmt.Printf("sideEvtRedeem %s\n", txid)
 			vout, _ := strconv.ParseInt(log.Topics[2][2+2+24*2:], 16, 64)
 			addr := common.HexToAddress(log.Topics[3][2+12*2:])
 			redeemTarget := BurnAddressMainChain // transfer-by-burning
@@ -627,7 +653,7 @@ func (bs *BlockScanner) processReceipt(gormTx *gorm.DB, tx *Transaction, metaInf
 			}
 		//ChangeAddr(address indexed oldCovenantAddr, address indexed newCovenantAddr);
 		case EventChangeAddr:
-			fmt.Printf("EventChangeAddr\n")
+			fmt.Printf("sideEvtChangeAddr\n")
 			oldCovenantAddr := common.HexToAddress(log.Topics[1][2+12*2:])
 			newCovenantAddr := common.HexToAddress(log.Topics[2][2+12*2:])
 			err := sideEvtChangeAddr(gormTx, string(oldCovenantAddr[:]), string(newCovenantAddr[:]))
@@ -636,7 +662,7 @@ func (bs *BlockScanner) processReceipt(gormTx *gorm.DB, tx *Transaction, metaInf
 			}
 		//Convert(uint256 indexed prevTxid, uint32 indexed prevVout, address indexed oldCovenantAddr, uint256 txid, uint32 vout, address newCovenantAddr);
 		case EventConvert:
-			fmt.Printf("EventConvert\n")
+			fmt.Printf("sideEvtConvert\n")
 			prevTxid := log.Topics[1][2:]
 			prevVout, _ := strconv.ParseInt(log.Topics[2][2+2+24*2:], 16, 64)
 			var params ConvertParams
@@ -652,7 +678,7 @@ func (bs *BlockScanner) processReceipt(gormTx *gorm.DB, tx *Transaction, metaInf
 		//Deleted(uint256 indexed txid, uint32 indexed vout, address indexed covenantAddr, uint8 sourceType);
 		case EventDeleted:
 			txid := log.Topics[1][2:]
-			fmt.Printf("EventDeleted %s\n", txid)
+			fmt.Printf("sideEvtDeleted %s\n", txid)
 			vout, _ := strconv.ParseInt(log.Topics[2][2+2+24*2:], 16, 64)
 			addr := common.HexToAddress(log.Topics[3][2+12*2:])
 			err := sideEvtDeleted(gormTx, string(addr[:]), txid, uint32(vout), data[31])

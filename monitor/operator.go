@@ -47,7 +47,7 @@ func (watcher *OperatorsWatcher) MainLoop() {
 		watcher.CheckUtxoLists()
 		watcher.checkErrCountAndSuspend(watcher.utxoCmpErrCounts)
 
-		if i % CheckNodesEveryN != 0 {
+		if i%CheckNodesEveryN != 0 {
 			continue
 		}
 		watcher.CheckNodes()
@@ -55,7 +55,7 @@ func (watcher *OperatorsWatcher) MainLoop() {
 	}
 }
 
-func (watcher *OperatorsWatcher) GetUtxoListsFromSbch() (utxoLists UtxoLists, err error ) {
+func (watcher *OperatorsWatcher) GetUtxoListsFromSbch() (utxoLists UtxoLists, err error) {
 	utxoLists.RedeemingUtxosForOperators, err = watcher.sbchClient.GetRedeemingUtxosForOperators()
 	if err != nil {
 		return
@@ -75,7 +75,7 @@ func (watcher *OperatorsWatcher) GetUtxoListsFromSbch() (utxoLists UtxoLists, er
 	return
 }
 
-func GetUtxoListsFromOperator(opClient *client.Client) (utxoLists UtxoLists, err error ) {
+func GetUtxoListsFromOperator(opClient *client.Client) (utxoLists UtxoLists, err error) {
 	utxoLists.RedeemingUtxosForOperators, err = opClient.GetRedeemingUtxosForOperators()
 	if err != nil {
 		return

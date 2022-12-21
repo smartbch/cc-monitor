@@ -18,6 +18,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/rpc"
 	ccabi "github.com/smartbch/smartbch/crosschain/abi"
 	sbchrpcclient "github.com/smartbch/smartbch/rpc/client"
 )
@@ -32,7 +33,7 @@ var (
 )
 
 // Used by the person who keeps the monitor's private key
-func encryptPrivKey() {
+func EncryptPrivKey() {
 	var inputHex string
 	fmt.Print("Enter the private key: ")
 	fmt.Scanf("%s", &inputHex)
@@ -54,10 +55,10 @@ func encryptPrivKey() {
 		panic(err)
 	}
 
-	fmt.Printf("The Encrypted Pubkey: %s", hex.EncodeToString(out))
+	fmt.Printf("The Encrypted Private Key: %s", hex.EncodeToString(out))
 }
 
-func readPrivKey() {
+func ReadPrivKey() {
 	eciesPrivKey, err := goecies.GenerateKey()
 	if err != nil {
 		panic(err)
@@ -67,21 +68,41 @@ func readPrivKey() {
 	fmt.Print("Enter the encrypted private key: ")
 	fmt.Scanf("%s", &inputHex)
 	bz, err := hex.DecodeString(inputHex)
-	if err == nil {
-		MyPrivKey, err = crypto.ToECDSA(bz)
-	}
 	if err != nil {
 		fmt.Print("Cannot decode hex string\n")
 		panic(err)
 	}
+	bz, err = goecies.Decrypt(eciesPrivKey, bz)
+	if err != nil {
+		fmt.Print("Cannot decrypt\n")
+		panic(err)
+	}
+	MyPrivKey, err = crypto.ToECDSA(bz)
+	if err != nil {
+		panic(err)
+	}
 	MyAddress = crypto.PubkeyToAddress(MyPrivKey.PublicKey)
+	fmt.Printf("MyAddress %s\n", MyAddress)
 }
 
-func sendPauseTransaction(ctx context.Context, client *ethclient.Client) error {
+func LoadPrivKeyInHex(inputHex string) {
+	bz, err := hex.DecodeString(inputHex)
+	if err != nil {
+		panic(err)
+	}
+	MyPrivKey, err = crypto.ToECDSA(bz)
+	if err != nil {
+		panic(err)
+	}
+	MyAddress = crypto.PubkeyToAddress(MyPrivKey.PublicKey)
+	fmt.Printf("MyAddress %s\n", MyAddress)
+}
+
+func sendPauseTransaction(ctx context.Context, rpcclient *rpc.Client, client *ethclient.Client) error {
 	errCount := 0
 	callData := ccabi.PackPauseFunc()
 	for errCount < RetryThreshold {
-		txHash, err := sendTransaction(ctx, client, MyAddress, CCAddress, callData)
+		txHash, err := sendTransaction(ctx, rpcclient, client, MyAddress, CCAddress, callData)
 		if err != nil {
 			fmt.Printf("Error in sendPauseTransaction: %s\n", err.Error())
 			errCount++
@@ -103,11 +124,11 @@ func sendPauseTransaction(ctx context.Context, client *ethclient.Client) error {
 	return nil
 }
 
-func sendResumeTransaction(ctx context.Context, client *ethclient.Client) error {
+func sendResumeTransaction(ctx context.Context, rpcclient *rpc.Client, client *ethclient.Client) error {
 	errCount := 0
 	callData := ccabi.PackResumeFunc()
 	for errCount < RetryThreshold {
-		txHash, err := sendTransaction(ctx, client, MyAddress, CCAddress, callData)
+		txHash, err := sendTransaction(ctx, rpcclient, client, MyAddress, CCAddress, callData)
 		if err != nil {
 			fmt.Printf("Error in sendResumeTransaction: %s\n", err.Error())
 			errCount++
@@ -129,12 +150,13 @@ func sendResumeTransaction(ctx context.Context, client *ethclient.Client) error 
 	return nil
 }
 
-func sendStartRescanTransaction(ctx context.Context, client *ethclient.Client, sbchClient *sbchrpcclient.Client,
+func sendStartRescanTransaction(ctx context.Context, rpcclient *rpc.Client, client *ethclient.Client, sbchClient *sbchrpcclient.Client,
 	lastRescanHeight, rescanHeight int64) error {
+	fmt.Printf("sendStartRescanTransaction lastRescanHeight %d rescanHeight %d \n", lastRescanHeight, rescanHeight)
 	errCount := 0
 	callData := ccabi.PackStartRescanFunc(big.NewInt(rescanHeight))
 	for errCount < RetryThreshold {
-		_, err := sendTransaction(ctx, client, MyAddress, CCAddress, callData)
+		_, err := sendTransaction(ctx, rpcclient, client, MyAddress, CCAddress, callData)
 		if err != nil {
 			fmt.Printf("Error in sendStartRescanTransaction: %s\n", err.Error())
 			errCount++
@@ -147,7 +169,9 @@ func sendStartRescanTransaction(ctx context.Context, client *ethclient.Client, s
 			errCount++
 			continue
 		}
-		if int64(ccInfo.LastRescannedHeight) != lastRescanHeight {
+		fmt.Printf("sendStartRescanTransaction-CcInfo: %#v\n", ccInfo)
+		if int64(ccInfo.RescannedHeight) == rescanHeight {
+			fmt.Printf("The new rescanHeight=%d, we can break\n", rescanHeight)
 			break
 		}
 	}
@@ -157,24 +181,25 @@ func sendStartRescanTransaction(ctx context.Context, client *ethclient.Client, s
 	return nil
 }
 
-func sendHandleUtxoTransaction(ctx context.Context, client *ethclient.Client, sbchClient *sbchrpcclient.Client) error {
+func sendHandleUtxoTransaction(ctx context.Context, rpcclient *rpc.Client, client *ethclient.Client, sbchClient *sbchrpcclient.Client) error {
 	errCount := 0
 	callData := ccabi.PackHandleUTXOsFunc()
 	for errCount < RetryThreshold {
-		_, err := sendTransaction(ctx, client, MyAddress, CCAddress, callData)
+		_, err := sendTransaction(ctx, rpcclient, client, MyAddress, CCAddress, callData)
 		if err != nil {
-			fmt.Printf("Error in sendStartRescanTransaction: %s\n", err.Error())
+			fmt.Printf("Error in sendHandleUtxoTransaction: %s\n", err.Error())
 			errCount++
 			continue
 		}
 		time.Sleep(12 * time.Second)
 		ccInfo, err := sbchClient.CcInfo(ctx)
 		if err != nil {
-			fmt.Printf("Error in sendStartRescanTransaction-CcInfo: %s\n", err.Error())
+			fmt.Printf("Error in sendHandleUtxoTransaction-CcInfo: %s\n", err.Error())
 			errCount++
 			continue
 		}
 		if ccInfo.UTXOAlreadyHandled {
+			fmt.Printf("we can break\n")
 			break
 		}
 	}
@@ -194,9 +219,38 @@ func sendPauseOperator() error {
 	return SendSuspendToOperator(hex.EncodeToString(sig), ts)
 }
 
-func sendTransaction(ctx context.Context, client *ethclient.Client, from, to common.Address, callData []byte) (common.Hash, error) {
+func toCallArg(msg ethereum.CallMsg) interface{} {
+	arg := map[string]interface{}{
+		"from": msg.From,
+		"to":   msg.To,
+	}
+	if len(msg.Data) > 0 {
+		arg["data"] = hexutil.Bytes(msg.Data)
+	}
+	if msg.Value != nil {
+		arg["value"] = (*hexutil.Big)(msg.Value)
+	}
+	if msg.Gas != 0 {
+		arg["gas"] = hexutil.Uint64(msg.Gas)
+	}
+	if msg.GasPrice != nil {
+		arg["gasPrice"] = (*hexutil.Big)(msg.GasPrice)
+	}
+	return arg
+}
+
+func callContractForDebug(ctx context.Context, client *rpc.Client, msg ethereum.CallMsg) {
+	var res map[string]any
+	err := client.CallContext(ctx, &res, "sbch_call", toCallArg(msg), "latest")
+	returnData := res["returnData"].(string)
+	fmt.Printf("sbch_call %s %v\n", string(hexutil.MustDecode(returnData)), err)
+}
+
+func sendTransaction(ctx context.Context, rpcclient *rpc.Client, client *ethclient.Client, from, to common.Address, callData []byte) (common.Hash, error) {
 	nonce, err := client.PendingNonceAt(ctx, from)
+	fmt.Printf("sendTransaction nonce %d\n", nonce)
 	if err != nil {
+		fmt.Printf("error in PendingNonceAt %v\n", err)
 		return common.Hash{}, err
 	}
 	//gasPrice, err := client.SuggestGasPrice(ctx)
@@ -204,17 +258,21 @@ func sendTransaction(ctx context.Context, client *ethclient.Client, from, to com
 	//	return common.Hash{}, err
 	//}
 	gasPrice := big.NewInt(10_000_000_000)
-	gasLimit, err := client.EstimateGas(ctx, ethereum.CallMsg{
+	callMsg := ethereum.CallMsg{
 		To:   &to,
 		Data: callData,
-	})
+	}
+	gasLimit, err := client.EstimateGas(ctx, callMsg)
 	if err != nil {
+		fmt.Printf("error in EstimateGas %v\n", err)
+		callContractForDebug(ctx, rpcclient, callMsg)
 		return common.Hash{}, err
 	}
 	fmt.Printf("gasPrice:%s,gasLimit:%d\n", gasPrice.String(), gasLimit)
 	value := big.NewInt(0)
 	tx := types.NewTransaction(nonce, CCAddress, value, gasLimit, gasPrice, callData)
 	chainID, err := client.NetworkID(ctx)
+	fmt.Printf("chain id: %#v\n", chainID)
 	if err != nil {
 		return common.Hash{}, err
 	}
@@ -222,6 +280,7 @@ func sendTransaction(ctx context.Context, client *ethclient.Client, from, to com
 	if err != nil {
 		return common.Hash{}, err
 	}
+	fmt.Printf("signed tx %#v\n", signedTx)
 	return signedTx.Hash(), client.SendTransaction(ctx, signedTx)
 }
 
@@ -246,4 +305,3 @@ func getSigAndTimestamp() (sig string, ts int64) {
 	sig = hexutil.Encode(signature)
 	return
 }
-
