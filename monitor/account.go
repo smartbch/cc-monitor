@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/big"
 	"strconv"
+	"strings"
 	"time"
 
 	goecies "github.com/ecies/go"
@@ -295,9 +296,10 @@ func checkTxStatus(ctx context.Context, client *ethclient.Client, txHash common.
 	return nil
 }
 
-func getSigAndTimestamp(pubkeyHex []byte) (sig string, ts int64) {
+func getSigAndTimestamp(pubkeyHex string) (sig string, ts int64) {
 	ts = time.Now().Unix()
-	hash := gethacc.TextHash([]byte(fmt.Sprintf("%s,%d", string(pubkeyHex), ts)))
+	msg := fmt.Sprintf("%s,%d", strings.Trim(pubkeyHex, "\""), ts)
+	hash := gethacc.TextHash([]byte(msg))
 	signature, err := crypto.Sign(hash, MyPrivKey)
 	if err != nil {
 		panic(err)

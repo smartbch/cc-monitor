@@ -7,7 +7,7 @@ require (
 	github.com/ethereum/go-ethereum v1.10.23
 	github.com/gcash/bchd v0.19.0
 	github.com/gcash/bchutil v0.0.0-20210113190856-6ea28dff4000
-	github.com/smartbch/cc-operator v0.0.0-20221222041157-c865a6051c75
+	github.com/smartbch/cc-operator v0.0.0-20221222125021-ead1250adeb3
 	github.com/smartbch/moeingevm v0.4.2-0.20220509120345-27a3d288346f
 	github.com/smartbch/smartbch v0.4.5-0.20221219040315-3a5d7b5cb1b8
 	github.com/stretchr/testify v1.7.2

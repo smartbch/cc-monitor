@@ -40,7 +40,7 @@ func (watcher *OperatorsWatcher) checkErrCountAndSuspend(errCounts []int) {
 				fmt.Printf("Failed to get pubkey from operator: %s\n", err.Error())
 				continue
 			}
-			sig, ts := getSigAndTimestamp(pubkeyHex)
+			sig, ts := getSigAndTimestamp(string(pubkeyHex))
 			watcher.opClients[i].Suspend(sig, ts)
 		}
 	}
