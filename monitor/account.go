@@ -295,9 +295,9 @@ func checkTxStatus(ctx context.Context, client *ethclient.Client, txHash common.
 	return nil
 }
 
-func getSigAndTimestamp() (sig string, ts int64) {
+func getSigAndTimestamp(pubkeyHex []byte) (sig string, ts int64) {
 	ts = time.Now().Unix()
-	hash := gethacc.TextHash([]byte(fmt.Sprintf("%d", ts)))
+	hash := gethacc.TextHash([]byte(fmt.Sprintf("%s,%d", string(pubkeyHex), ts)))
 	signature, err := crypto.Sign(hash, MyPrivKey)
 	if err != nil {
 		panic(err)

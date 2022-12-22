@@ -34,6 +34,8 @@ const (
 	SendHandleUtxoDelay   = 12 * 60 // 22 * 60
 	RescanThreshold       = 3
 	ThresholdIn24Hours    = 1000_0000_0000 // 1000 BCH
+
+	finalizeBlockCount = 1
 )
 
 var (
@@ -91,7 +93,6 @@ type Log struct {
 func SendStartRescanAndHandleUTXO(ctx context.Context, rawclient *rpc.Client, client *ethclient.Client, bchClient *rpcclient.Client, lastRescanHeight, lastRescanTime, handleUtxoDelay int64) {
 	height := lastRescanHeight + 1
 	sendHandleUtxo := false
-	finalizeBlockCount := 1
 	for {
 		_, err := bchClient.GetBlockHash(height + int64(finalizeBlockCount))
 		if err != nil {
@@ -254,7 +255,7 @@ type CCTxCounter struct {
 // if the block at 'blockHeight' is finalized, analyze its transactions to increase 'ccTxCount'
 // if the block exists (no matter finalized or not), check evil transactions in it.
 func (txc *CCTxCounter) CheckMainChainBlock(gormTx *gorm.DB, blockHeight int64) (err error, isFinalized bool) {
-	_, err = txc.client.GetBlockHash(blockHeight + 9) // is this block finalized?
+	_, err = txc.client.GetBlockHash(blockHeight + finalizeBlockCount) // is this block finalized?
 	isFinalized = err == nil
 	fmt.Printf("CheckMainChainBlock height %d isFinalized %v\n", blockHeight, isFinalized)
 	hash, err := txc.client.GetBlockHash(blockHeight) // even if it is not finalized, we still need checkEvilTx

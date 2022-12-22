@@ -35,7 +35,12 @@ type OperatorsWatcher struct {
 func (watcher *OperatorsWatcher) checkErrCountAndSuspend(errCounts []int) {
 	for i, errCount := range errCounts {
 		if errCount > ErrCountThreshold {
-			sig, ts := getSigAndTimestamp()
+			pubkeyHex, err := watcher.opClients[i].GetPubkeyBytes()
+			if err != nil {
+				fmt.Printf("Failed to get pubkey from operator: %s\n", err.Error())
+				continue
+			}
+			sig, ts := getSigAndTimestamp(pubkeyHex)
 			watcher.opClients[i].Suspend(sig, ts)
 		}
 	}
