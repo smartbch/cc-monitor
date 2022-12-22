@@ -128,18 +128,14 @@ func (watcher *OperatorsWatcher) CheckNodes() error {
 
 	sortNodes(latestNodes)
 	for i, opClient := range watcher.opClients {
-		currNodes, err := opClient.GetNodes()
+		opInfo, err := opClient.GetInfo()
 		if err != nil {
-			fmt.Println("GetNodes from operator failed:", err)
+			fmt.Println("GetInfo from operator failed:", err)
 			continue
 		}
 
-		newNodes, err := opClient.GetNewNodes()
-		if err != nil {
-			fmt.Println("GetNewNodes from operator failed:", err)
-			continue
-		}
-
+		currNodes := opInfo.CurrNodes
+		newNodes := opInfo.NewNodes
 		sortNodes(currNodes)
 		sortNodes(newNodes)
 		if !reflect.DeepEqual(latestNodes, currNodes) &&

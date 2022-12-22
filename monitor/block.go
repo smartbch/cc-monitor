@@ -93,10 +93,10 @@ func SendStartRescanAndHandleUTXO(ctx context.Context, rawclient *rpc.Client, cl
 	sendHandleUtxo := false
 	finalizeBlockCount := 1
 	for {
-		_, err := bchClient.GetBlockHash(height + finalizeBlockCount)
+		_, err := bchClient.GetBlockHash(height + int64(finalizeBlockCount))
 		if err != nil {
 			time.Sleep(30 * time.Second)
-			fmt.Printf("get block %d hash err:%s\n", height + finalizeBlockCount, err)
+			fmt.Printf("get block %d hash err:%s\n", height+int64(finalizeBlockCount), err)
 			continue
 		}
 		fmt.Printf("mainnet height:%d\n", height)
