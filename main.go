@@ -34,7 +34,8 @@ const (
 )
 
 func main() {
-	run()
+	monitor.DebugWatcher()
+	//run()
 	//simpleRun()
 }
 

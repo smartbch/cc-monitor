@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"strconv"
 	"strings"
 	"time"
 
@@ -208,16 +207,6 @@ func sendHandleUtxoTransaction(ctx context.Context, rpcclient *rpc.Client, clien
 		return errors.New("sendPauseTransaction reaches retry threshold")
 	}
 	return nil
-}
-
-func sendPauseOperator() error {
-	ts := strconv.FormatInt(time.Now().Unix(), 10)
-	hash := gethacc.TextHash([]byte(ts))
-	sig, err := crypto.Sign(hash, MyPrivKey)
-	if err != nil {
-		panic(err)
-	}
-	return SendSuspendToOperator(hex.EncodeToString(sig), ts)
 }
 
 func toCallArg(msg ethereum.CallMsg) interface{} {

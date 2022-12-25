@@ -7,9 +7,9 @@ require (
 	github.com/ethereum/go-ethereum v1.10.23
 	github.com/gcash/bchd v0.19.0
 	github.com/gcash/bchutil v0.0.0-20210113190856-6ea28dff4000
-	github.com/smartbch/cc-operator v0.0.0-20221222125021-ead1250adeb3
+	github.com/smartbch/cc-operator v0.0.0-20221225110657-964d84d0e7cf
 	github.com/smartbch/moeingevm v0.4.2-0.20220509120345-27a3d288346f
-	github.com/smartbch/smartbch v0.4.5-0.20221219040315-3a5d7b5cb1b8
+	github.com/smartbch/smartbch v0.4.5-0.20221223072312-83ff6e7ddfe3
 	github.com/stretchr/testify v1.7.2
 	gorm.io/driver/sqlite v1.3.6
 	gorm.io/gorm v1.23.8
@@ -18,6 +18,7 @@ require (
 require (
 	github.com/StackExchange/wmi v0.0.0-20210224194228-fe8f1750fd46 // indirect
 	github.com/bluele/gcache v0.0.2 // indirect
+	github.com/btcsuite/btcd v0.22.0-beta // indirect
 	github.com/btcsuite/btcd/btcec/v2 v2.2.0 // indirect
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd // indirect
 	github.com/btcsuite/websocket v0.0.0-20150119174127-31079b680792 // indirect
