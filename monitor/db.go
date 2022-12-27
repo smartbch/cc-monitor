@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -452,7 +453,7 @@ func sideEvtConvert(tx *gorm.DB, txid string, vout uint32, newTxid string, newVo
 		debug.PrintStack()
 		s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", txid, vout, utxo)
 		return NewFatal(fmt.Sprintf("[sideEvtConvert] UTXO's recorded covenantAddr (%s) is not %s"+s,
-			utxo.CovenantAddr, newCovenantAddr))
+			hex.EncodeToString([]byte(utxo.CovenantAddr)), hex.EncodeToString([]byte(newCovenantAddr))))
 	}
 	if utxo.NewTxid != newTxid || utxo.NewVout != newVout {
 		debug.PrintStack()

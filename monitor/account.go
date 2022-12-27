@@ -199,7 +199,7 @@ func sendHandleUtxoTransaction(ctx context.Context, rpcclient *rpc.Client, clien
 			continue
 		}
 		if ccInfo.UTXOAlreadyHandled {
-			fmt.Printf("we can break\n")
+			fmt.Printf("UTXOAlreadyHandled, we can break\n")
 			break
 		}
 	}
@@ -232,8 +232,10 @@ func toCallArg(msg ethereum.CallMsg) interface{} {
 func callContractForDebug(ctx context.Context, client *rpc.Client, msg ethereum.CallMsg) {
 	var res map[string]any
 	err := client.CallContext(ctx, &res, "sbch_call", toCallArg(msg), "latest")
-	returnData := res["returnData"].(string)
-	fmt.Printf("sbch_call %s %v\n", string(hexutil.MustDecode(returnData)), err)
+	fmt.Printf("callContractForDebug %#v\n", res)
+	if returnData, ok := res["returnData"].(string); ok {
+		fmt.Printf("sbch_call %s %v\n", string(hexutil.MustDecode(returnData)), err)
+	}
 }
 
 func sendTransaction(ctx context.Context, rpcclient *rpc.Client, client *ethclient.Client, from, to common.Address, callData []byte) (common.Hash, error) {
@@ -249,6 +251,7 @@ func sendTransaction(ctx context.Context, rpcclient *rpc.Client, client *ethclie
 	//}
 	gasPrice := big.NewInt(10_000_000_000)
 	callMsg := ethereum.CallMsg{
+		From: MyAddress,
 		To:   &to,
 		Data: callData,
 	}

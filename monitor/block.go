@@ -562,9 +562,9 @@ func (bs *BlockScanner) ScanBlock(ctx context.Context, timestamp, blockHeight in
 		} else if method.Name == "startRescan" && len(input) == 36 {
 			bs.parseStartRescan(ctx, timestamp, tx, input)
 		}
+		fmt.Printf("txToBeParsed %#v\n", tx)
 		txToBeParsed = append(txToBeParsed, tx)
 	}
-	fmt.Printf("txToBeParsed %#v\n", txToBeParsed)
 	metaInfo := getMetaInfo(bs.db)
 	err = bs.db.Transaction(func(gormTx *gorm.DB) error { // One DB-Transaction to update UTXO set and height
 		for _, tx := range txToBeParsed {
@@ -663,19 +663,17 @@ func (bs *BlockScanner) processReceipt(gormTx *gorm.DB, tx *Transaction, metaInf
 			}
 		//Convert(uint256 indexed prevTxid, uint32 indexed prevVout, address indexed oldCovenantAddr, uint256 txid, uint32 vout, address newCovenantAddr);
 		case EventConvert:
-			fmt.Printf("sideEvtConvert\n")
-			prevTxid := log.Topics[1][2:]
-			prevVout, _ := strconv.ParseInt(log.Topics[2][2+2+24*2:], 16, 64)
-			var params ConvertParams
-			err := bs.abi.UnpackIntoInterface(&params, "Convert", data)
-			if err != nil {
-				return err
-			}
-			err = sideEvtConvert(gormTx, prevTxid[:], uint32(prevVout), hex.EncodeToString(params.Txid[:]), params.Vout,
-				string(params.CovenantAddr[:]))
-			if err != nil {
-				return err
-			}
+                         fmt.Printf("sideEvtConvert\n")
+                         prevTxid := log.Topics[1][2:]
+                         prevVout, _ := strconv.ParseInt(log.Topics[2][2+2+24*2:], 16, 64)
+                         txid := hex.EncodeToString(data[:32])
+                         vout := binary.BigEndian.Uint32(data[32+28:32+32])
+                         newCovenantAddr := string(data[64+12:64+32])
+                         fmt.Printf("sideEvtConvert data %s txid %s vout %d newCovenantAddr %s\n", log.Data, txid, vout, newCovenantAddr)
+                         err := sideEvtConvert(gormTx, prevTxid[:], uint32(prevVout), txid, vout, newCovenantAddr)
+                         if err != nil {
+                                 return err
+                         }
 		//Deleted(uint256 indexed txid, uint32 indexed vout, address indexed covenantAddr, uint8 sourceType);
 		case EventDeleted:
 			txid := log.Topics[1][2:]

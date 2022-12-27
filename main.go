@@ -34,15 +34,15 @@ const (
 )
 
 func main() {
-	monitor.DebugWatcher()
-	//run()
+	//monitor.DebugWatcher()
+	run()
 	//simpleRun()
 }
 
 func run() {
 	parseFlags()
 	//monitor.ReadPrivKey()
-	monitor.LoadPrivKeyInHex("8a93af6864fa0f32521e7ffab043020a1346ed92228faa07906b293c86f3416e")
+	monitor.LoadPrivKeyInHex("d248df3c728282a66521c94a4852c2d4c7b3c3612ba5ce0baf43e64b2ecc49fb")
 	sbchClient, err := sbchrpcclient.Dial(sideChainUrl)
 	if err != nil {
 		panic(err)
@@ -53,6 +53,12 @@ func run() {
 		panic(err)
 	}
 	fmt.Printf("%#v\n", ccInfo)
+	for i, mon := range ccInfo.Monitors {
+		fmt.Printf("Monitor %d %#v\n", i, mon)
+	}
+
+	//currCovenantAddr := hexutil.MustDecode("0x6Ad3f81523c87aa17f1dFA08271cF57b6277C98e")
+	//lastCovenantAddr := hexutil.MustDecode("0x0000000000000000000000000000000000000000")
 	currCovenantAddr := hexutil.MustDecode(ccInfo.CurrCovenantAddress)
 	lastCovenantAddr := hexutil.MustDecode(ccInfo.LastCovenantAddress)
 	fmt.Printf("CovenantAddr %s last %s\n", monitor.ScriptHashToAddr(currCovenantAddr), monitor.ScriptHashToAddr(lastCovenantAddr))
@@ -73,7 +79,7 @@ func run() {
 	info := monitor.MetaInfo{
 		LastRescanTime:   -1,
 		ScannedHeight:    int64(ccInfo.RescannedHeight),
-		MainChainHeight:  1531570,
+		MainChainHeight:  1532624,
 		SideChainHeight:  1,
 		LastCovenantAddr: string(lastCovenantAddr[:]),
 		CurrCovenantAddr: string(currCovenantAddr[:]),
