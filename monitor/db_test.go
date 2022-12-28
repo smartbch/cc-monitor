@@ -10,14 +10,6 @@ import (
 	//"gorm.io/gorm"
 )
 
-//func MigrateSchema(db *gorm.DB) {
-//func OpenDB(path string) *gorm.DB {
-//func getMetaInfo(tx *gorm.DB) (info MetaInfo) {
-//func initMetaInfo(tx *gorm.DB, info MetaInfo) error {
-//func updateLastRescanTime(tx *gorm.DB, lastRescanTime int64) error {
-//func updateMainChainHeight(tx *gorm.DB, mainChainHeight int64) error {
-//func updateCovenantAddr(tx *gorm.DB, lastAddr, currAddr string) error {
-
 func (m *MetaInfo) Equals(x MetaInfo) bool {
 	return m.LastRescanTime == x.LastRescanTime &&
 		m.ScannedHeight == x.ScannedHeight &&
@@ -67,7 +59,7 @@ func TestDB0(t *testing.T) {
 		CurrCovenantAddr: "ccaddr1",
 		LastCovenantAddr: "ccaddr0",
 	}
-	initMetaInfo(db, &info)
+	InitMetaInfo(db, &info)
 	err := sideEvtRedeemable(db, "covenantAddr", "txid", 0)
 	require.True(t, strings.Index(err.Error(), "This UTXO cannot be found") > 0)
 	err = sideEvtLostAndFound(db, "covenantAddr", "txid", 0)
@@ -103,7 +95,7 @@ func TestDB1(t *testing.T) {
 		CurrCovenantAddr: "ccaddr1",
 		LastCovenantAddr: "ccaddr0",
 	}
-	initMetaInfo(db, &info)
+	InitMetaInfo(db, &info)
 	utxo := CcUtxo{
 		Type:         ToBeRecognized,
 		CovenantAddr: "ccaddr1",
@@ -162,7 +154,7 @@ func TestDB2(t *testing.T) {
 		CurrCovenantAddr: "ccaddr1",
 		LastCovenantAddr: "ccaddr0",
 	}
-	initMetaInfo(db, &info)
+	InitMetaInfo(db, &info)
 	utxo := CcUtxo{
 		Type:         ToBeRecognized,
 		CovenantAddr: "ccaddr1",
@@ -215,7 +207,7 @@ func TestDB3(t *testing.T) {
 		CurrCovenantAddr: "ccaddr1",
 		LastCovenantAddr: "ccaddr0",
 	}
-	initMetaInfo(db, &info)
+	InitMetaInfo(db, &info)
 	utxo := CcUtxo{
 		Type:         ToBeRecognized,
 		CovenantAddr: "ccaddr1",
@@ -263,7 +255,7 @@ func TestDB4(t *testing.T) {
 		CurrCovenantAddr: "ccaddr1",
 		LastCovenantAddr: "ccaddr0",
 	}
-	initMetaInfo(db, &info)
+	InitMetaInfo(db, &info)
 	utxo := CcUtxo{
 		Type:         ToBeRecognized,
 		CovenantAddr: "ccaddr1",
@@ -377,7 +369,7 @@ func TestMetaInfo(t *testing.T) {
 		CurrCovenantAddr: "addr1",
 		LastCovenantAddr: "addr0",
 	}
-	initMetaInfo(db, &info)
+	InitMetaInfo(db, &info)
 
 	// get the value
 	info2 := getMetaInfo(db)

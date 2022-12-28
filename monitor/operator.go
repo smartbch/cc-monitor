@@ -16,9 +16,7 @@ import (
 )
 
 const (
-	OperatorCheckInterval = 1 * time.Minute
-	CheckNodesEveryN      = 5
-	ErrCountThreshold     = 3
+	ErrCountThreshold = 3
 )
 
 type UtxoLists struct {
@@ -80,20 +78,6 @@ func (watcher *OperatorsWatcher) checkErrCountAndSuspend(errCounts []int) {
 		//	sig, ts := getSigAndTimestamp(string(pubkeyHex))
 		//	watcher.opClients[i].Suspend(sig, ts)
 		//}
-	}
-}
-
-func (watcher *OperatorsWatcher) MainLoop() {
-	for i := 0; ; i++ {
-		watcher.CheckUtxoLists()
-		watcher.checkErrCountAndSuspend(watcher.utxoCmpErrCounts)
-
-		if i%CheckNodesEveryN != 0 {
-			continue
-		}
-		watcher.CheckNodes()
-		watcher.checkErrCountAndSuspend(watcher.nodeCmpErrCounts)
-		time.Sleep(OperatorCheckInterval)
 	}
 }
 
@@ -194,6 +178,7 @@ func (watcher *OperatorsWatcher) CheckUtxoLists() error {
 			watcher.utxoCmpErrCounts[i] = 0
 		}
 	}
+	watcher.checkErrCountAndSuspend(watcher.utxoCmpErrCounts)
 	return nil
 }
 
@@ -228,6 +213,7 @@ func (watcher *OperatorsWatcher) CheckNodes() error {
 		}
 	}
 
+	watcher.checkErrCountAndSuspend(watcher.nodeCmpErrCounts)
 	return nil
 }
 

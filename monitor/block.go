@@ -178,12 +178,24 @@ func Catchup(bs *BlockScanner) {
 	fmt.Printf("Catchup Finished, endHeight = %d\n", endHeight)
 }
 
-func MainLoop(bs *BlockScanner, sbchClient *sbchrpcclient.Client) {
+func MainLoop(bs *BlockScanner, sbchClient *sbchrpcclient.Client, watcher *OperatorsWatcher) {
 	ctx := context.Background()
 	metaInfo := getMetaInfo(bs.db)
 	height := metaInfo.SideChainHeight
-	for { // process sidechain blocks
+	for i := 0; ; i++ { // process sidechain blocks
 		time.Sleep(ScanSideChainInterval)
+		if i % 100 == 0 {
+			fmt.Println("CheckUtxoLists")
+			watcher.CheckUtxoLists()
+		}
+		if i % 500 == 0 {
+			fmt.Println("CheckNodes")
+			watcher.CheckNodes()
+		}
+		if i % 200 == 0 {
+			fmt.Println("CheckUtxoListsAgainstDB")
+			watcher.CheckUtxoListsAgainstDB(bs.db)
+		}
 		timestamp, err := bs.GetBlockTime(ctx, height)
 		if err != nil {
 			fmt.Printf("Error in GetBlockTime: %s\n", err.Error())

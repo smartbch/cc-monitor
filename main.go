@@ -5,7 +5,10 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"time"
 
+	opclient "github.com/smartbch/cc-operator/client"
+	"github.com/smartbch/cc-operator/sbch"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -42,7 +45,7 @@ func main() {
 func run() {
 	parseFlags()
 	//monitor.ReadPrivKey()
-	monitor.LoadPrivKeyInHex("d248df3c728282a66521c94a4852c2d4c7b3c3612ba5ce0baf43e64b2ecc49fb")
+	monitor.LoadPrivKeyInHex("")
 	sbchClient, err := sbchrpcclient.Dial(sideChainUrl)
 	if err != nil {
 		panic(err)
@@ -87,8 +90,26 @@ func run() {
 	monitor.MigrateSchema(db)
 	monitor.InitMetaInfo(db, &info)
 	bs := monitor.NewBlockScanner(bchClient, db, sideChainUrl)
+
+	simpleRpcClient, err := sbch.NewSimpleRpcClient("0x4fE159925585EB891bf165d5ee7945bd871F3A7B",
+		sideChainUrl, 10 * time.Second)
+	if err != nil {
+		panic(err)
+	}
+	opClients := make([]*opclient.Client, 8)
+	opClients[0] = opclient.NewClient("https://3.1.26.210:8801", 10 * time.Second)
+	opClients[1] = opclient.NewClient("https://3.1.26.210:8802", 10 * time.Second)
+	opClients[2] = opclient.NewClient("https://3.1.26.210:8803", 10 * time.Second)
+	opClients[3] = opclient.NewClient("https://3.1.26.210:8804", 10 * time.Second)
+	opClients[4] = opclient.NewClient("https://3.1.26.210:8805", 10 * time.Second)
+	opClients[5] = opclient.NewClient("https://3.1.26.210:8806", 10 * time.Second)
+	opClients[6] = opclient.NewClient("https://3.1.26.210:8807", 10 * time.Second)
+	opClients[7] = opclient.NewClient("https://3.1.26.210:8808", 10 * time.Second)
+
+	watcher := monitor.NewOperatorsWatcher(simpleRpcClient, opClients)
+
 	monitor.Catchup(bs)
-	monitor.MainLoop(bs, sbchClient)
+	monitor.MainLoop(bs, sbchClient, watcher)
 }
 
 func parseFlags() {

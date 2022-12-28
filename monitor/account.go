@@ -245,6 +245,12 @@ func sendTransaction(ctx context.Context, rpcclient *rpc.Client, client *ethclie
 		fmt.Printf("error in PendingNonceAt %v\n", err)
 		return common.Hash{}, err
 	}
+	balance, err := client.BalanceAt(ctx, MyAddress, nil)
+	if err != nil {
+		fmt.Printf("error in BalanceAt %v\n", err)
+		return common.Hash{}, err
+	}
+	fmt.Printf("My Balance %s\n", balance)
 	//gasPrice, err := client.SuggestGasPrice(ctx)
 	//if err != nil {
 	//	return common.Hash{}, err
