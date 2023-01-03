@@ -45,7 +45,8 @@ func main() {
 func run() {
 	parseFlags()
 	//monitor.ReadPrivKey()
-	monitor.LoadPrivKeyInHex("")
+	//monitor.LoadPrivKeyInHex("d248df3c728282a66521c94a4852c2d4c7b3c3612ba5ce0baf43e64b2ecc49fb")
+	monitor.LoadPrivKeyInHex("308b3d6401d489ec3d6f11b9be8dd3627d274d0b830340fb23b4abb55a6895d1")
 	sbchClient, err := sbchrpcclient.Dial(sideChainUrl)
 	if err != nil {
 		panic(err)
@@ -56,6 +57,12 @@ func run() {
 		panic(err)
 	}
 	fmt.Printf("%#v\n", ccInfo)
+        rpcClient, err := rpc.Dial(sideChainUrl)
+        if err != nil {
+                panic(err)
+        }
+	ccInfosForTest := monitor.GetCcInfosForTest(ctx, rpcClient)
+	fmt.Printf("%#v\n", ccInfosForTest)
 	for i, mon := range ccInfo.Monitors {
 		fmt.Printf("Monitor %d %#v\n", i, mon)
 	}
@@ -79,19 +86,22 @@ func run() {
 		panic(err)
 	}
 	db := monitor.OpenDB(dbPath)
+	//monitor.PrintAllUtxo(db)
+	//panic("Stop")
 	info := monitor.MetaInfo{
 		LastRescanTime:   -1,
 		ScannedHeight:    int64(ccInfo.RescannedHeight),
-		MainChainHeight:  1532624,
+		MainChainHeight:  1533762,
 		SideChainHeight:  1,
 		LastCovenantAddr: string(lastCovenantAddr[:]),
 		CurrCovenantAddr: string(currCovenantAddr[:]),
 	}
 	monitor.MigrateSchema(db)
 	monitor.InitMetaInfo(db, &info)
+	monitor.InitTotalAmount(db)
 	bs := monitor.NewBlockScanner(bchClient, db, sideChainUrl)
 
-	simpleRpcClient, err := sbch.NewSimpleRpcClient("0x4fE159925585EB891bf165d5ee7945bd871F3A7B",
+	simpleRpcClient, err := sbch.NewSimpleRpcClient("0xb56393d9c5fae775c8B846e8E03B2954a68D3094",
 		sideChainUrl, 10 * time.Second)
 	if err != nil {
 		panic(err)

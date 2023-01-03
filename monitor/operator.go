@@ -50,11 +50,16 @@ func DebugWatcher() {
 	opClients[7] = opclient.NewClient("https://3.1.26.210:8808", 10 * time.Second)
 
 	watcher := NewOperatorsWatcher(sbchClient, opClients)
-	//watcher.MainLoop()
-	db := OpenDB("sqlite.db")
-	watcher.CheckUtxoListsAgainstDB(db)
-}
 
+	errCounts := make([]int, len(opClients))
+	for i := 1; i < 2; i++ {
+		errCounts[i] = ErrCountThreshold + 1
+	}
+	watcher.checkErrCountAndSuspend(errCounts)
+	//watcher.MainLoop()
+	//db := OpenDB("sqlite.db")
+	//watcher.CheckUtxoListsAgainstDB(db)
+}
 
 func NewOperatorsWatcher(sbchClient *sbch.SimpleRpcClient, opClients []*opclient.Client) *OperatorsWatcher {
 	res := &OperatorsWatcher{
@@ -69,15 +74,18 @@ func NewOperatorsWatcher(sbchClient *sbch.SimpleRpcClient, opClients []*opclient
 func (watcher *OperatorsWatcher) checkErrCountAndSuspend(errCounts []int) {
 	for i, errCount := range errCounts {
 		fmt.Printf("checkErrCountAndSuspend %d %d\n", i, errCount)
-		//if errCount > ErrCountThreshold {
-		//	pubkeyHex, err := watcher.opClients[i].GetPubkeyBytes()
-		//	if err != nil {
-		//		fmt.Printf("Failed to get pubkey from operator: %s\n", err.Error())
-		//		continue
-		//	}
-		//	sig, ts := getSigAndTimestamp(string(pubkeyHex))
-		//	watcher.opClients[i].Suspend(sig, ts)
-		//}
+		if errCount > ErrCountThreshold {
+			pubkeyHex, err := watcher.opClients[i].GetPubkeyBytes()
+			if err != nil {
+				fmt.Printf("Failed to get pubkey from operator: %s\n", err.Error())
+				continue
+			}
+			sig, ts := getSigAndTimestamp(string(pubkeyHex))
+			result, err := watcher.opClients[i].Suspend(sig, ts)
+			fmt.Printf("Suspend Result %s err %#v\n", string(result), err)
+			info, err := watcher.opClients[i].GetInfo()
+			fmt.Printf("After Suspend #%d: %#v\n", i, info)
+		}
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
 	ccabi "github.com/smartbch/smartbch/crosschain/abi"
+	cctypes "github.com/smartbch/smartbch/crosschain/types"
 	sbchrpcclient "github.com/smartbch/smartbch/rpc/client"
 )
 
@@ -227,6 +228,14 @@ func toCallArg(msg ethereum.CallMsg) interface{} {
 		arg["gasPrice"] = (*hexutil.Big)(msg.GasPrice)
 	}
 	return arg
+}
+
+func GetCcInfosForTest(ctx context.Context, client *rpc.Client) (res cctypes.CCInfosForTest) {
+	err := client.CallContext(ctx, &res, "sbch_getCcInfosForTest")
+	if err != nil {
+		fmt.Printf("Error in sbch_getCcInfosForTest %s\n", err.Error())
+	}
+	return
 }
 
 func callContractForDebug(ctx context.Context, client *rpc.Client, msg ethereum.CallMsg) {

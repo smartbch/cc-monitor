@@ -102,6 +102,78 @@ type MetaInfo struct {
 	IsPaused         bool
 }
 
+type TotalAmount struct {
+	gorm.Model
+	TotalRedeemAmountS2M       int64
+	TotalRedeemNumsS2M         int64
+	TotalLostAndFoundAmountS2M int64
+	TotalLostAndFoundNumsS2M   int64
+	TotalTransferAmountM2S     int64
+	TotalTransferNumsM2S       int64
+	TotalTransferByBurnAmount  int64
+	TotalTransferByBurnNums    int64
+}
+
+func getTotalAmount(tx *gorm.DB) (totalAmount TotalAmount) {
+	result := tx.First(&totalAmount)
+	if result.Error != nil {
+		panic(result.Error)
+	}
+	return
+}
+
+func incrTotalTransferByBurn(tx *gorm.DB, delta int64) {
+	var totalAmount TotalAmount
+	result := tx.First(&totalAmount)
+	if result.Error != nil {
+		panic(result.Error)
+	}
+	fmt.Printf("incrTotalTransferByBurn delta %d num %d\n", delta, totalAmount.TotalTransferByBurnNums + 1)
+	tx.Model(&totalAmount).Updates(TotalAmount{
+		TotalTransferByBurnAmount: totalAmount.TotalTransferByBurnAmount + delta,
+		TotalTransferByBurnNums:   totalAmount.TotalTransferByBurnNums + 1,
+	})
+}
+
+func incrTotalTransfer(tx *gorm.DB, delta int64) {
+	var totalAmount TotalAmount
+	result := tx.First(&totalAmount)
+	if result.Error != nil {
+		panic(result.Error)
+	}
+	fmt.Printf("incrTotalTransfer delta %d num %d\n", delta, totalAmount.TotalTransferNumsM2S + 1)
+	tx.Model(&totalAmount).Updates(TotalAmount{
+		TotalTransferAmountM2S: totalAmount.TotalTransferAmountM2S + delta,
+		TotalTransferNumsM2S:   totalAmount.TotalTransferNumsM2S + 1,
+	})
+}
+
+func incrTotalRedeem(tx *gorm.DB, delta int64) {
+	var totalAmount TotalAmount
+	result := tx.First(&totalAmount)
+	if result.Error != nil {
+		panic(result.Error)
+	}
+	fmt.Printf("incrTotalRedeem delta %d num %d\n", delta, totalAmount.TotalRedeemNumsS2M + 1)
+	tx.Model(&totalAmount).Updates(TotalAmount{
+		TotalRedeemAmountS2M: totalAmount.TotalRedeemAmountS2M + delta,
+		TotalRedeemNumsS2M:   totalAmount.TotalRedeemNumsS2M + 1,
+	})
+}
+
+func incrTotalLostAndFound(tx *gorm.DB, delta int64) {
+	var totalAmount TotalAmount
+	result := tx.First(&totalAmount)
+	if result.Error != nil {
+		panic(result.Error)
+	}
+	fmt.Printf("incrTotalLostAndFound delta %d num %d\n", delta, totalAmount.TotalLostAndFoundNumsS2M + 1)
+	tx.Model(&totalAmount).Updates(TotalAmount{
+		TotalLostAndFoundAmountS2M: totalAmount.TotalLostAndFoundAmountS2M + delta,
+		TotalLostAndFoundNumsS2M:   totalAmount.TotalLostAndFoundNumsS2M + 1,
+	})
+}
+
 func (m *MetaInfo) incrAmountInSlidingWindow(amount, currTime int64) {
 	fmt.Printf("before incrAmountInSlidingWindow: amount %s\ntimestamp %s\n", m.AmountX24, m.TimestampX24)
 	hour := currTime / 3600
@@ -161,6 +233,7 @@ func MigrateSchema(db *gorm.DB) {
 		Vout:         1,
 	})
 	db.AutoMigrate(&MetaInfo{})
+	db.AutoMigrate(&TotalAmount{})
 }
 
 func OpenDB(path string) *gorm.DB {
@@ -177,6 +250,13 @@ func getMetaInfo(tx *gorm.DB) (info MetaInfo) {
 		panic(result.Error)
 	}
 	return info
+}
+
+func InitTotalAmount(tx *gorm.DB) {
+	result := tx.Create(&TotalAmount{})
+	if result.Error != nil {
+		panic(result.Error)
+	}
 }
 
 func InitMetaInfo(tx *gorm.DB, info *MetaInfo) {
@@ -210,21 +290,19 @@ func updateMainChainHeight(tx *gorm.DB, mainChainHeight int64) error {
 	return nil
 }
 
-func updateCovenantAddr(tx *gorm.DB, lastAddr, currAddr string) error {
-	var oldInfo MetaInfo
-	result := tx.First(&oldInfo)
-	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-		panic(result.Error)
-	}
-	tx.Model(&oldInfo).Updates(MetaInfo{CurrCovenantAddr: currAddr, LastCovenantAddr: lastAddr})
-	return nil
-}
-
 func printUtxoSet(tx *gorm.DB) {
 	var utxoList []CcUtxo
 	tx.Find(&utxoList)
 	for i, utxo := range utxoList {
 		fmt.Printf("UTXO#%d %#v\n", i, utxo)
+	}
+}
+
+func PrintAllUtxo(tx *gorm.DB) {
+	var utxoList []CcUtxo
+	tx.Find(&utxoList)
+	for _, utxo := range utxoList {
+		fmt.Printf("%d %s-%d %d\n", utxo.Type, utxo.Txid, utxo.Vout, utxo.Amount)
 	}
 }
 
@@ -281,9 +359,10 @@ func sideEvtRedeemable(tx *gorm.DB, covenantAddr string, txid string, vout uint3
 	if utxo.CovenantAddr != covenantAddr {
 		debug.PrintStack()
 		s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", txid, vout, utxo)
-		return NewFatal(fmt.Sprintf("[sideEvtRedeemable] UTXO's recorded covenantAddr (%s) is not %s"+s,
-			utxo.CovenantAddr, covenantAddr))
+		return NewFatal(fmt.Sprintf("[sideEvtRedeemable] UTXO's recorded covenantAddr (%s) is not %s "+s,
+			hex.EncodeToString([]byte(utxo.CovenantAddr)), hex.EncodeToString([]byte(covenantAddr))))
 	}
+	incrTotalTransfer(tx, utxo.Amount)
 	tx.Model(&utxo).Update("Type", Redeemable)
 	tx.First(&utxo, "txid == ? AND vout == ?", txid, vout)
 	fmt.Printf("DBG in sideEvtRedeemable %#v\n", utxo)
@@ -307,9 +386,10 @@ func sideEvtLostAndFound(tx *gorm.DB, covenantAddr string, txid string, vout uin
 		debug.PrintStack()
 		s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", txid, vout, utxo)
 		return NewFatal(fmt.Sprintf("[sideEvtLostAndFound] UTXO's recorded covenantAddr (%s) is not %s"+s,
-			utxo.CovenantAddr, covenantAddr))
+			hex.EncodeToString([]byte(utxo.CovenantAddr)), hex.EncodeToString([]byte(covenantAddr))))
 	}
 	tx.Model(&utxo).Update("Type", LostAndFound)
+	incrTotalTransfer(tx, utxo.Amount)
 	return nil
 }
 
@@ -326,7 +406,7 @@ func sideEvtRedeem(tx *gorm.DB, covenantAddr string, txid string, vout uint32, s
 		debug.PrintStack()
 		s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", txid, vout, utxo)
 		return NewFatal(fmt.Sprintf("[sideEvtRedeem] UTXO's recorded covenantAddr (%s) is not %s"+s,
-			utxo.CovenantAddr, covenantAddr))
+			hex.EncodeToString([]byte(utxo.CovenantAddr)), hex.EncodeToString([]byte(covenantAddr))))
 	}
 	if sourceType == FromRedeemable {
 		if utxo.Type != Redeemable {
@@ -336,6 +416,7 @@ func sideEvtRedeem(tx *gorm.DB, covenantAddr string, txid string, vout uint32, s
 		}
 		tx.Model(&utxo).Updates(CcUtxo{Type: Redeeming, RedeemTarget: redeemTarget})
 		meta.incrAmountInSlidingWindow(utxo.Amount, currTime)
+		incrTotalRedeem(tx, utxo.Amount)
 		return nil
 	} else if sourceType == FromLostAndFound {
 		if utxo.Type != LostAndFound {
@@ -345,6 +426,7 @@ func sideEvtRedeem(tx *gorm.DB, covenantAddr string, txid string, vout uint32, s
 		}
 		tx.Model(&utxo).Updates(CcUtxo{Type: LostAndReturn, RedeemTarget: redeemTarget})
 		meta.incrAmountInSlidingWindow(utxo.Amount, currTime)
+		incrTotalLostAndFound(tx, utxo.Amount)
 		return nil
 	} else if sourceType == FromBurnRedeem {
 		if utxo.Type != ToBeRecognized {
@@ -360,6 +442,7 @@ func sideEvtRedeem(tx *gorm.DB, covenantAddr string, txid string, vout uint32, s
 		}
 		tx.Model(&utxo).Updates(CcUtxo{Type: Redeeming, RedeemTarget: redeemTarget})
 		meta.incrAmountInSlidingWindow(utxo.Amount, currTime)
+		incrTotalTransferByBurn(tx, utxo.Amount)
 		return nil
 	}
 	debug.PrintStack()
@@ -409,7 +492,7 @@ func mainEvtFinishConverting(tx *gorm.DB, txid string, vout uint32, newCovenantA
 		debug.PrintStack()
 		s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", txid, vout, utxo)
 		return NewFatal(fmt.Sprintf("[mainEvtFinishConverting] UTXO's recorded covenantAddr (%s) is not %s"+s,
-			utxo.CovenantAddr, newCovenantAddr))
+			hex.EncodeToString([]byte(utxo.CovenantAddr)), hex.EncodeToString([]byte(newCovenantAddr))))
 	}
 	if writeBack {
 		tx.Model(&utxo).Updates(CcUtxo{Type: HandedOver, NewTxid: newTxid, NewVout: newVout})
@@ -433,7 +516,7 @@ func sideEvtChangeAddr(tx *gorm.DB, oldCovenantAddr, newCovenantAddr string) err
 				utxo.CovenantAddr + " " + oldCovenantAddr)
 		}
 	}
-	return updateCovenantAddr(tx, oldCovenantAddr, newCovenantAddr)
+	return nil
 }
 
 func sideEvtConvert(tx *gorm.DB, txid string, vout uint32, newTxid string, newVout uint32, newCovenantAddr string) error {
