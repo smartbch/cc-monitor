@@ -69,12 +69,12 @@ type FatalError struct {
 	errStr string
 }
 
-func (e FatalError) Error() string {
+func (e *FatalError) Error() string {
 	return e.errStr
 }
 
-func NewFatal(s string) FatalError {
-	return FatalError{errStr: s}
+func NewFatal(s string) *FatalError {
+	return &FatalError{errStr: s}
 }
 
 type CcUtxo struct {
@@ -99,7 +99,6 @@ type MetaInfo struct {
 	LastCovenantAddr string
 	AmountX24        string // The total amount transferred in each hour in the past 24 hours
 	TimestampX24     string // the corresponding hour-number of the slots in AmountX24
-	IsPaused         bool
 }
 
 type TotalAmount struct {
@@ -213,13 +212,14 @@ func (m *MetaInfo) getSumInSlidingWindow(currTime int64) (sum int64) {
 	if err := json.Unmarshal([]byte(m.AmountX24), &amountX24); err != nil {
 		panic(err)
 	}
-	fmt.Printf("getSumInSlidingWindow %d: amount %s\ntimestamp %s\n", currTime, m.AmountX24, m.TimestampX24)
 	hour := currTime / 3600
 	for i, a := range amountX24 {
 		if hour-24 < timestampX24[i] {
 			sum += a
 		}
+		//fmt.Printf("   hour %d timestamp %d sum %d\n", hour, timestampX24[i], sum)
 	}
+	fmt.Printf("getSumInSlidingWindow hour=%d slot=%d sum=%d: amount %s\ntimestamp %s\n", hour, hour%24, sum, m.AmountX24, m.TimestampX24)
 	return
 }
 
@@ -294,15 +294,7 @@ func printUtxoSet(tx *gorm.DB) {
 	var utxoList []CcUtxo
 	tx.Find(&utxoList)
 	for i, utxo := range utxoList {
-		fmt.Printf("UTXO#%d %#v\n", i, utxo)
-	}
-}
-
-func PrintAllUtxo(tx *gorm.DB) {
-	var utxoList []CcUtxo
-	tx.Find(&utxoList)
-	for _, utxo := range utxoList {
-		fmt.Printf("%d %s-%d %d\n", utxo.Type, utxo.Txid, utxo.Vout, utxo.Amount)
+		fmt.Printf("UTXO#%d %d %s-%d %d\n", i, utxo.Type, utxo.Txid, utxo.Vout, utxo.Amount)
 	}
 }
 
@@ -353,8 +345,9 @@ func sideEvtRedeemable(tx *gorm.DB, covenantAddr string, txid string, vout uint3
 	if utxo.Type != ToBeRecognized {
 		debug.PrintStack()
 		s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", txid, vout, utxo)
-		fmt.Println("[sideEvtRedeemable] UTXO's old type is not ToBeRecognized " + s)
-		return NewFatal("[sideEvtRedeemable] UTXO's old type is not ToBeRecognized " + s)
+		s = fmt.Sprintf("[sideEvtRedeemable] UTXO's old type(%d) is not ToBeRecognized ", utxo.Type, s)
+		fmt.Println(s)
+		return NewFatal(s)
 	}
 	if utxo.CovenantAddr != covenantAddr {
 		debug.PrintStack()
@@ -364,8 +357,8 @@ func sideEvtRedeemable(tx *gorm.DB, covenantAddr string, txid string, vout uint3
 	}
 	incrTotalTransfer(tx, utxo.Amount)
 	tx.Model(&utxo).Update("Type", Redeemable)
-	tx.First(&utxo, "txid == ? AND vout == ?", txid, vout)
-	fmt.Printf("DBG in sideEvtRedeemable %#v\n", utxo)
+	//tx.First(&utxo, "txid == ? AND vout == ?", txid, vout)
+	//fmt.Printf("DBG in sideEvtRedeemable %#v\n", utxo)
 	return nil
 }
 
@@ -463,12 +456,21 @@ func mainEvtRedeemOrReturn(tx *gorm.DB, txid string, vout uint32, receiver strin
 		s := fmt.Sprintf("Txid=%s vout=%d\n%#v\n", txid, vout, utxo)
 		return NewFatal("[mainEvtRedeemOrReturn] UTXO's old type is not Redeeming or LostAndReturn " + s)
 	}
+	hexReceiver := hex.EncodeToString([]byte(receiver))
+	if utxo.RedeemTarget != hexReceiver {
+		debug.PrintStack()
+		s := fmt.Sprintf("reftarget=%s actualtarget=%s Txid=%s vout=%d\n%#v\n",
+			utxo.RedeemTarget, hexReceiver, txid, vout, utxo)
+		s = "[mainEvtRedeemOrReturn] UTXO's RedeemTarget is wrong." + s
+		fmt.Println(s)
+		return NewFatal(s)
+	}
 	if writeBack {
 		if utxo.Type == Redeeming {
-			tx.Model(&utxo).Updates(CcUtxo{Type: RedeemingToDel, RedeemTarget: receiver})
+			tx.Model(&utxo).Update("Type", RedeemingToDel)
 		}
 		if utxo.Type == LostAndReturn {
-			tx.Model(&utxo).Updates(CcUtxo{Type: LostAndReturnToDel, RedeemTarget: receiver})
+			tx.Model(&utxo).Update("Type", LostAndReturnToDel)
 		}
 	}
 	return nil

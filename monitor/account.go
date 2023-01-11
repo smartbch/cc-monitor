@@ -99,24 +99,51 @@ func LoadPrivKeyInHex(inputHex string) {
 	fmt.Printf("MyAddress %s\n", MyAddress)
 }
 
-func sendPauseTransaction(ctx context.Context, rpcclient *rpc.Client, client *ethclient.Client) error {
+func checkPausedByMe(ctx context.Context, sbchClient *sbchrpcclient.Client) bool {
+	ccInfo, err := sbchClient.CcInfo(ctx)
+	if err != nil {
+		fmt.Printf("[checkPausedByMe] Error: %#v\n", err)
+		return false
+	}
+	foundMe := false
+	myAddress := MyAddress.String()
+	fmt.Printf("[checkPausedByMe] MonitorsWithPauseCommand %#v\n", ccInfo.MonitorsWithPauseCommand)
+	for _, addr := range ccInfo.MonitorsWithPauseCommand {
+		if myAddress == addr {
+			foundMe = true
+			break
+		}
+	}
+	return foundMe
+}
+
+func sendPauseTransaction(ctx context.Context, rpcclient *rpc.Client, client *ethclient.Client, sbchClient *sbchrpcclient.Client) error {
+	fmt.Printf("[sendPauseTransaction] time %d\n", time.Now().Unix())
+	pausedByMe := checkPausedByMe(ctx, sbchClient)
+	if pausedByMe {
+		return nil // No need to sendPauseTransaction
+	}
 	errCount := 0
 	callData := ccabi.PackPauseFunc()
 	for errCount < RetryThreshold {
-		txHash, err := sendTransaction(ctx, rpcclient, client, MyAddress, CCAddress, callData)
+		_, err := sendTransaction(ctx, rpcclient, client, MyAddress, CCAddress, callData)
 		if err != nil {
-			fmt.Printf("Error in sendPauseTransaction: %s\n", err.Error())
+			fmt.Printf("[sendPauseTransaction]: %s\n", err.Error())
 			errCount++
 			continue
 		}
 		time.Sleep(12 * time.Second)
-		err = checkTxStatus(ctx, client, txHash)
-		if err != nil {
-			fmt.Printf("Error in sendPauseTransaction-checkTxStatus: %s\n", err.Error())
-			errCount++
-			continue
-		} else {
+		//err = checkTxStatus(ctx, client, txHash)
+		//if err != nil {
+		//	fmt.Printf("[sendPauseTransaction] checkTxStatus: %s\n", err.Error())
+		//	errCount++
+		//}
+		pausedByMe = checkPausedByMe(ctx, sbchClient)
+		fmt.Printf("[sendPauseTransaction] pausedByMe: %v\n", pausedByMe)
+		if pausedByMe {
 			break
+		} else {
+			errCount++
 		}
 	}
 	if errCount >= RetryThreshold {
@@ -125,35 +152,57 @@ func sendPauseTransaction(ctx context.Context, rpcclient *rpc.Client, client *et
 	return nil
 }
 
-func sendResumeTransaction(ctx context.Context, rpcclient *rpc.Client, client *ethclient.Client) error {
+func sendResumeTransaction(ctx context.Context, rpcclient *rpc.Client, client *ethclient.Client, sbchClient *sbchrpcclient.Client) error {
+	fmt.Printf("[sendResumeTransaction] time %d\n", time.Now().Unix())
+	pausedByMe := checkPausedByMe(ctx, sbchClient)
+	if !pausedByMe {
+		return nil // No need to sendResumeTransaction
+	}
 	errCount := 0
 	callData := ccabi.PackResumeFunc()
 	for errCount < RetryThreshold {
-		txHash, err := sendTransaction(ctx, rpcclient, client, MyAddress, CCAddress, callData)
+		_, err := sendTransaction(ctx, rpcclient, client, MyAddress, CCAddress, callData)
 		if err != nil {
 			fmt.Printf("Error in sendResumeTransaction: %s\n", err.Error())
 			errCount++
 			continue
 		}
 		time.Sleep(12 * time.Second)
-		err = checkTxStatus(ctx, client, txHash)
-		if err != nil {
-			fmt.Printf("Error in sendResumeTransaction-checkTxStatus: %s\n", err.Error())
-			errCount++
-			continue
-		} else {
+		//err = checkTxStatus(ctx, client, txHash)
+		//if err != nil {
+		//	fmt.Printf("Error in sendResumeTransaction-checkTxStatus: %s\n", err.Error())
+		//	errCount++
+		//}
+		pausedByMe = checkPausedByMe(ctx, sbchClient)
+		fmt.Printf("[sendResumeTransaction] pausedByMe: %v\n", pausedByMe)
+		if !pausedByMe {
 			break
+		} else {
+			errCount++
 		}
 	}
 	if errCount >= RetryThreshold {
-		return errors.New("sendPauseTransaction reaches retry threshold")
+		return errors.New("sendResumeTransaction reaches retry threshold")
 	}
 	return nil
 }
 
 func sendStartRescanTransaction(ctx context.Context, rpcclient *rpc.Client, client *ethclient.Client, sbchClient *sbchrpcclient.Client,
-	lastRescanHeight, rescanHeight int64) error {
-	fmt.Printf("sendStartRescanTransaction lastRescanHeight %d rescanHeight %d \n", lastRescanHeight, rescanHeight)
+	rescanHeight int64) error {
+	fmt.Printf("[sendStartRescanTransaction] rescanHeight %d time %d\n", rescanHeight, time.Now().Unix())
+	ccInfo, err := sbchClient.CcInfo(ctx)
+	if err != nil {
+		fmt.Printf("Error in pre-sendStartRescanTransaction-CcInfo: %s\n", err.Error())
+	}
+	fmt.Printf("ccInfo: %#v\n", ccInfo)
+	if !ccInfo.UTXOAlreadyHandled {
+		fmt.Printf("Return with UTXOAlreadyHandled==false ccInfo.RescannedHeight %d myRescanHeight %d\n", ccInfo.RescannedHeight, rescanHeight)
+		return nil
+	}
+	if len(ccInfo.MonitorsWithPauseCommand) != 0 {
+		fmt.Printf("Return because paused\n")
+		return nil
+	}
 	errCount := 0
 	callData := ccabi.PackStartRescanFunc(big.NewInt(rescanHeight))
 	for errCount < RetryThreshold {
@@ -174,6 +223,9 @@ func sendStartRescanTransaction(ctx context.Context, rpcclient *rpc.Client, clie
 		if int64(ccInfo.RescannedHeight) == rescanHeight {
 			fmt.Printf("The new rescanHeight=%d, we can break\n", rescanHeight)
 			break
+		} else if !ccInfo.UTXOAlreadyHandled {
+			fmt.Printf("UTXOAlreadyHandled==false ccInfo.RescannedHeight %d myRescanHeight %d we can break\n", ccInfo.RescannedHeight, rescanHeight)
+			break
 		}
 	}
 	if errCount >= RetryThreshold {
@@ -183,6 +235,20 @@ func sendStartRescanTransaction(ctx context.Context, rpcclient *rpc.Client, clie
 }
 
 func sendHandleUtxoTransaction(ctx context.Context, rpcclient *rpc.Client, client *ethclient.Client, sbchClient *sbchrpcclient.Client) error {
+	fmt.Printf("[sendHandleUtxoTransaction] time %d\n", time.Now().Unix())
+	ccInfo, err := sbchClient.CcInfo(ctx)
+	if err != nil {
+		fmt.Printf("Error in pre-sendHandleUtxoTransaction-CcInfo: %s\n", err.Error())
+	}
+	fmt.Printf("ccInfo: %#v\n", ccInfo)
+	if ccInfo.UTXOAlreadyHandled {
+		fmt.Printf("Return with UTXOAlreadyHandled==true ccInfo.RescannedHeight %d\n")
+		return nil
+	}
+	if len(ccInfo.MonitorsWithPauseCommand) != 0 {
+		fmt.Printf("Return because paused\n")
+		return nil
+	}
 	errCount := 0
 	callData := ccabi.PackHandleUTXOsFunc()
 	for errCount < RetryThreshold {

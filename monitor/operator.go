@@ -39,6 +39,10 @@ func DebugWatcher() {
 	if err != nil {
 		panic(err)
 	}
+	opClients := make([]*opclient.Client, 1)
+	opClients[0] = opclient.NewClient("https://3.1.26.210:8810", 10 * time.Second)
+
+	/*
 	opClients := make([]*opclient.Client, 8)
 	opClients[0] = opclient.NewClient("https://3.1.26.210:8801", 10 * time.Second)
 	opClients[1] = opclient.NewClient("https://3.1.26.210:8802", 10 * time.Second)
@@ -48,14 +52,19 @@ func DebugWatcher() {
 	opClients[5] = opclient.NewClient("https://3.1.26.210:8806", 10 * time.Second)
 	opClients[6] = opclient.NewClient("https://3.1.26.210:8807", 10 * time.Second)
 	opClients[7] = opclient.NewClient("https://3.1.26.210:8808", 10 * time.Second)
+	*/
 
 	watcher := NewOperatorsWatcher(sbchClient, opClients)
 
+	/*
 	errCounts := make([]int, len(opClients))
-	for i := 1; i < 2; i++ {
+	for i := 0; i < 1; i++ {
 		errCounts[i] = ErrCountThreshold + 1
 	}
 	watcher.checkErrCountAndSuspend(errCounts)
+	*/
+
+	watcher.suspendAll()
 	//watcher.MainLoop()
 	//db := OpenDB("sqlite.db")
 	//watcher.CheckUtxoListsAgainstDB(db)
@@ -71,20 +80,49 @@ func NewOperatorsWatcher(sbchClient *sbch.SimpleRpcClient, opClients []*opclient
 	return res
 }
 
+func (watcher *OperatorsWatcher) suspendAll() (okCount int) {
+	for i := range watcher.opClients {
+		fmt.Printf("[suspendAll] #%d\n", i)
+		pubkeyHex, err := watcher.opClients[i].GetPubkeyBytes()
+		if err != nil {
+			fmt.Printf("[suspendAll] Failed to get pubkey from operator: %s\n", err.Error())
+			continue
+		}
+		sig, ts := getSigAndTimestamp(string(pubkeyHex))
+		result, err := watcher.opClients[i].Suspend(sig, ts)
+		fmt.Printf("[suspendAll] Suspend Result %s err %#v\n", string(result), err)
+		if err != nil {
+			continue
+		}
+		info, err := watcher.opClients[i].GetInfo()
+		if err != nil {
+			fmt.Printf("[suspendAll] Error After Suspend #%d: %#v\n", i, err)
+		} else {
+			okCount++
+			fmt.Printf("[suspendAll] After Suspend #%d: %#v\n", i, info)
+		}
+	}
+	return
+}
+
 func (watcher *OperatorsWatcher) checkErrCountAndSuspend(errCounts []int) {
 	for i, errCount := range errCounts {
-		fmt.Printf("checkErrCountAndSuspend %d %d\n", i, errCount)
+		fmt.Printf("[checkErrCountAndSuspend] %d %d\n", i, errCount)
 		if errCount > ErrCountThreshold {
 			pubkeyHex, err := watcher.opClients[i].GetPubkeyBytes()
 			if err != nil {
-				fmt.Printf("Failed to get pubkey from operator: %s\n", err.Error())
+				fmt.Printf("[checkErrCountAndSuspend] Failed to get pubkey from operator: %s\n", err.Error())
 				continue
 			}
 			sig, ts := getSigAndTimestamp(string(pubkeyHex))
 			result, err := watcher.opClients[i].Suspend(sig, ts)
-			fmt.Printf("Suspend Result %s err %#v\n", string(result), err)
+			fmt.Printf("[checkErrCountAndSuspend] Suspend Result %s err %#v\n", string(result), err)
 			info, err := watcher.opClients[i].GetInfo()
-			fmt.Printf("After Suspend #%d: %#v\n", i, info)
+			if err != nil {
+				fmt.Printf("[checkErrCountAndSuspend] Error After Suspend #%d: %#v\n", i, err)
+			} else {
+				fmt.Printf("[checkErrCountAndSuspend] After Suspend #%d: %#v\n", i, info)
+			}
 		}
 	}
 }
@@ -129,38 +167,80 @@ func GetUtxoListsFromOperator(opClient *opclient.Client) (utxoLists UtxoLists, e
 	return
 }
 
-func (watcher *OperatorsWatcher) CheckUtxoListsAgainstDB(db *gorm.DB) {
+func (watcher *OperatorsWatcher) CheckUtxoListsAgainstDB(db *gorm.DB) *FatalError {
 	fmt.Println("========== GetToBeConvertedUtxosForMonitors =============")
 	utxoList, err := watcher.sbchClient.GetToBeConvertedUtxosForMonitors()
 	if err != nil {
 		panic(err)
 	}
-	watcher.checkUtxoList(db, utxoList)
-	fmt.Println("========== GetRedeemingUtxosForMonitors =============")
-	utxoList, err = watcher.sbchClient.GetRedeemingUtxosForMonitors()
-	if err != nil {
-		panic(err)
+	if err := watcher.checkUtxoList(db, utxoList, "ToBeConverted", HandingOver); err != nil {
+		//fmt.Printf("[CheckUtxoListsAgainstDB] Error %#v\n", err)
+		return err
 	}
-	watcher.checkUtxoList(db, utxoList)
 	fmt.Println("========== GetRedeemableUtxos =============")
 	utxoList, err = watcher.sbchClient.GetRedeemableUtxos()
 	if err != nil {
 		panic(err)
 	}
-	watcher.checkUtxoList(db, utxoList)
+	if err := watcher.checkUtxoList(db, utxoList, "Redeemable", Redeemable); err != nil {
+		//fmt.Printf("[CheckUtxoListsAgainstDB] Error %#v\n", err)
+		return err
+	}
+	fmt.Println("========== GetRedeemingUtxosForMonitors =============")
+	utxoList, err = watcher.sbchClient.GetRedeemingUtxosForMonitors()
+	if err != nil {
+		panic(err)
+	}
+	if err := watcher.checkUtxoList(db, utxoList, "Redeeming|LostAndReturn", Redeeming); err != nil {
+		//fmt.Printf("[CheckUtxoListsAgainstDB] Error %#v\n", err)
+		return err
+	}
+	fmt.Println("========== GetLostAndFoundUtxos =============")
+	utxoList, err = watcher.sbchClient.GetLostAndFoundUtxos()
+	if err != nil {
+		panic(err)
+	}
+	if err := watcher.checkUtxoList(db, utxoList, "LostAndFound", LostAndFound); err != nil {
+		//fmt.Printf("[CheckUtxoListsAgainstDB] Error %#v\n", err)
+		return err
+	}
+	return nil
 }
 
-func (watcher *OperatorsWatcher) checkUtxoList(db *gorm.DB, utxoList []*sbchrpctypes.UtxoInfo) {
+func (watcher *OperatorsWatcher) checkUtxoList(db *gorm.DB, utxoList []*sbchrpctypes.UtxoInfo, typStr string, typ int) *FatalError {
 	for _, utxo := range utxoList {
 		var utxoInDB CcUtxo
 		txid := hex.EncodeToString(utxo.Txid[:])
 		result := db.First(&utxoInDB, "txid == ? AND vout == ?", txid, utxo.Index)
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-			fmt.Printf("ErrRecordNotFound %s-%d\n", txid, utxo.Index)
-			continue
+			s := fmt.Sprintf("[CheckUtxoListsAgainstDB] Cannot find UTXO %s %s-%d\n", typStr, txid, utxo.Index)
+			return NewFatal(s)
+		}
+		mismatch := utxoInDB.Type != typ
+		if typ == Redeeming {
+			mismatch = utxoInDB.Type != Redeeming && utxoInDB.Type != RedeemingToDel && utxoInDB.Type != LostAndReturn && utxoInDB.Type != LostAndReturnToDel
+		}
+		if typ == HandingOver {
+			mismatch = utxoInDB.Type != HandingOver && utxoInDB.Type != HandedOver
+		}
+		if mismatch {
+			return NewFatal(fmt.Sprintf("[CheckUtxoListsAgainstDB] UTXO is not %s (it's %d) %s-%d\n", typStr, utxoInDB.Type, txid, utxo.Index))
+		}
+		if typ == Redeeming {
+			hexTarget := hex.EncodeToString(utxo.RedeemTarget[:])
+			if utxoInDB.RedeemTarget != hexTarget {
+				s := fmt.Sprintf("[CheckUtxoListsAgainstDB] redeemtarget is not %s (it's %s) %s-%d\n",
+					utxoInDB.RedeemTarget, hexTarget, txid, utxo.Index)
+				return NewFatal(s)
+			//} else {
+			//	s := fmt.Sprintf("[CheckUtxoListsAgainstDB] redeemtarget is ok. %s (it's %s) %s-%d\n",
+			//		utxoInDB.RedeemTarget, hexTarget, txid, utxo.Index)
+			//	fmt.Println(s)
+			}
 		}
 		fmt.Printf("db %d %d rpc %d %s-%d\n", utxoInDB.Type, utxoInDB.Amount, utxo.Amount, txid, utxo.Index)
 	}
+	return nil
 }
 
 func (watcher *OperatorsWatcher) CheckUtxoLists() error {
@@ -170,14 +250,12 @@ func (watcher *OperatorsWatcher) CheckUtxoLists() error {
 		return err
 	}
 
-	fmt.Printf("refUtxoLists: %#v\n", refUtxoLists)
 	for i, opClient := range watcher.opClients {
 		utxoLists, err := GetUtxoListsFromOperator(opClient)
 		if err != nil {
 			fmt.Println("GetUtxoListsFromOperator failed:", err)
 			continue
 		}
-		fmt.Printf("utxoLists: %#v\n", utxoLists)
 
 		if !reflect.DeepEqual(refUtxoLists, utxoLists) {
 			fmt.Println("utxoLists not match: ", opClient.RpcURL())
